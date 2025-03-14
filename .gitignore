@@ -3,4 +3,4 @@ __pycache__
 lightning_logs/
 mnist_rotation_new/
 mnist_rotation_new.zip
-
+wandb/
