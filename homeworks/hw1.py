@@ -1,43 +1,35 @@
 import os
 from typing import Any
 
+import wandb
 import torch
-from pytorch_lightning.utilities.types import TRAIN_DATALOADERS, EVAL_DATALOADERS
 
 torch.set_float32_matmul_precision('high')
 
 
 from escnn import gspaces
 from escnn import nn
-from tqdm import tqdm
-from tqdm.asyncio import trange
 
-
-
-from torch.utils.data import Dataset
 from torchvision.transforms import RandomRotation
 from torchvision.transforms import Pad
 from torchvision.transforms import Resize
 from torchvision.transforms import ToTensor
 from torchvision.transforms import Compose
 from torchvision.transforms import InterpolationMode
-import pytorch_lightning as pl
-import numpy as np
 
-from PIL import Image
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
 
 from homeworks.mnist_rot import MnistRotDataset
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # download the dataset
 
-import dataset_download
-
 class C8SteerableCNN(pl.LightningModule):
 
     def __init__(self, n_classes=10):
         super(C8SteerableCNN, self).__init__()
-
+        self.save_hyperparameters()
         # the model is equivariant under rotations by 45 degrees, modelled by C8
         self.r2_act = gspaces.rot2dOnR2(N=8)
 
@@ -147,6 +139,7 @@ class C8SteerableCNN(pl.LightningModule):
         # The Layer outputs a new GeometricTensor, associated with the layer's output type.
         # As a result, consecutive layers need to have matching input/output types
         x = self.block1(x)
+
         x = self.block2(x)
         x = self.pool1(x)
 
@@ -238,7 +231,8 @@ def test(model, test_loader):
 
 
 if __name__ == '__main__':
-
-    trainer = pl.Trainer(accelerator="gpu",devices=1)
+    wandb_logger = WandbLogger(project='research_task_hws')
+    trainer = pl.Trainer(max_epochs=20, logger=wandb_logger)
     g_cnn = C8SteerableCNN().to(device)
     trainer.fit(g_cnn)
+    wandb.finish()
