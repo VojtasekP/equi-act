@@ -1,6 +1,10 @@
 import os
 from typing import Any
 
+import torchmetrics
+from lightning import Trainer
+from lightning.pytorch.callbacks import EarlyStopping
+
 import wandb
 import torch
 
@@ -17,19 +21,17 @@ from torchvision.transforms import ToTensor
 from torchvision.transforms import Compose
 from torchvision.transforms import InterpolationMode
 
-import pytorch_lightning as pl
+import pytorch_lightning as L
+import lightning as L
 from pytorch_lightning.loggers import WandbLogger
 
-from homeworks.mnist_rot import MnistRotDataset
+from homeworks.mnist_rot import MnistRotDataset, MnistRotDataModule
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # download the dataset
-
-class C8SteerableCNN(pl.LightningModule):
-
+class C8SteerableCNN(torch.nn.Module):
     def __init__(self, n_classes=10):
-        super(C8SteerableCNN, self).__init__()
-        self.save_hyperparameters()
+        super().__init__()
         # the model is equivariant under rotations by 45 degrees, modelled by C8
         self.r2_act = gspaces.rot2dOnR2(N=8)
 
@@ -164,55 +166,49 @@ class C8SteerableCNN(pl.LightningModule):
         x = self.fully_net(x.reshape(x.shape[0], -1))
 
         return x
-    def loss(self, input: Any, target: Any):
-        criterion = torch.nn.CrossEntropyLoss()
-        return criterion(input, target)
+class LitCnn(L.LightningModule):
+    def __init__(self, n_classes=10):
+        super().__init__()
+        self.model = C8SteerableCNN(n_classes=n_classes)
+        self.save_hyperparameters()
+        self.loss_fn = torch.nn.CrossEntropyLoss()
+        self.lr = 1e-3
+
+        self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
+        self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
+        self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
+
+
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        y_hat = self(x)
-        loss = self.loss(y_hat, y)
-        self.log('train_loss', loss, prog_bar=True,logger=True)
+        loss, acc = self.shared_step(batch, batch_idx, self.train_acc)
+        self.log('train_loss', loss, prog_bar=True, logger=True)
+        self.log('train_acc', acc, prog_bar=True, logger=True)
         return loss
+
     def validation_step(self, batch, batch_idx):
+        loss, acc = self.shared_step(batch, batch_idx, self.val_acc)
+        self.log('val_loss', loss, prog_bar=True, logger=True)
+        self.log('val_acc', acc, prog_bar=True, logger=True)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        loss, acc = self.shared_step(batch, batch_idx, self.test_acc)
+        self.log('test_loss', loss, prog_bar=True, logger=True)
+        self.log('test_acc', acc, prog_bar=True, logger=True)
+        return loss
+
+    def shared_step(self, batch, batch_idx, acc_metric):
         x, y = batch
-        y_hat = self(x)
-        val_loss = self.loss(y_hat, y)
-        self.log('val_loss', val_loss, prog_bar=True,logger=True)
-        return val_loss
+        y_hat = self.model(x)
+        loss = self.loss_fn(y_hat, y)
+
+        acc = acc_metric(y_hat, y)
+        return loss, acc
+
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=5e-5, weight_decay=1e-5)
 
-    def train_dataloader(self):
-        num_workers = min(8, os.cpu_count() // 2)
-        # this allows to use odd-size filters with stride 2 when downsampling a feature map in the model
-        pad = Pad((0, 0, 1, 1), fill=0)
-        resize1 = Resize(87)
-        resize2 = Resize(29)
-        totensor = ToTensor()
-        train_transform = Compose([
-            pad,
-            resize1,
-            RandomRotation(180., interpolation=InterpolationMode.BILINEAR, expand=False),
-            resize2,
-            totensor,
-        ])
 
-        mnist_train = MnistRotDataset(mode='train', transform=train_transform)
-        train_loader = torch.utils.data.DataLoader(mnist_train, shuffle=True, batch_size=64, num_workers=num_workers)
-        return train_loader
-    def val_dataloader(self):
-        num_workers = min(8, os.cpu_count() // 2)
-        # this allows to use odd-size filters with stride 2 when downsampling a feature map in the model
-        pad = Pad((0, 0, 1, 1), fill=0)
-        totensor = ToTensor()
-        test_transform = Compose([
-            pad,
-            totensor,
-        ])
-        mnist_val = MnistRotDataset(mode='test', transform=test_transform)
-
-        val_loader = torch.utils.data.DataLoader(mnist_val, batch_size=64, num_workers=num_workers)
-        return val_loader
 def test(model, test_loader):
     total = 0
     correct = 0
@@ -232,7 +228,8 @@ def test(model, test_loader):
 
 if __name__ == '__main__':
     wandb_logger = WandbLogger(project='research_task_hws')
-    trainer = pl.Trainer(max_epochs=20, logger=wandb_logger)
-    g_cnn = C8SteerableCNN().to(device)
-    trainer.fit(g_cnn)
+    mnist_rot = MnistRotDataModule()
+    g_cnn = LitCnn()
+    trainer = Trainer(max_epochs=20, logger=wandb_logger,callbacks=[EarlyStopping(monitor="val_loss", mode="min")])
+    trainer.fit(g_cnn, datamodule=mnist_rot)
     wandb.finish()
