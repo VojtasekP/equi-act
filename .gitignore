@@ -5,4 +5,4 @@ mnist_rotation_new/
 mnist_rotation_new.zip
 wandb/
 research_task_hws/
-
+*.ckpt
