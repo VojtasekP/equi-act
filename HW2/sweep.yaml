@@ -1,0 +1,43 @@
+program: train.py
+method: bayes
+metric:
+  name: val_loss
+  goal: minimize
+parameters:
+  lr:
+    min: 0.0001
+    max: 0.01
+  optimizer:
+    values: ["adamw", "adam"]
+  batch_size:
+    values: [64, 128]
+  max_rot_order:
+    values: [1, 2]
+  channels_per_block:
+    values:
+      - [8, 16, 64]
+      - [16, 32, 128]
+  layers_per_block:
+    values:
+      - [2, 2, 2]
+      - [2, 3, 2]
+  gated:
+    values: [true, false]
+  kernel_size:
+    values: [3, 5]
+  pool_stride:
+    values: [2]
+  pool_sigma:
+    values: [0.66]
+  invariant_channels:
+    values: [64, 128]
+  use_bn:
+    values: [true]
+  non_linearity:
+    values: ["n_relu", "n_softplus"]
+  epochs:
+    value: 20
+  n_classes:
+    value: 10
+  patience:
+    value: 5
