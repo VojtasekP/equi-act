@@ -3,70 +3,54 @@ method: bayes
 metric:
   name: val_loss
   goal: minimize
+
+early_terminate:
+  type: hyperband
+  min_iter: 3
+
 parameters:
+  # optimization
   lr:
+    distribution: log_uniform_values
     min: 0.0001
+    max: 0.05
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.00001
     max: 0.01
-  optimizer:
-    values: ["adamw", "adam"]
+
+  # data / training
   batch_size:
-    values: [64, 128]
+    values: [64, 128, 256]
+  epochs:
+    value: 50
+  patience:
+    value: 5
+
+  # model
   max_rot_order:
     values: [1, 2, 3]
   channels_per_block:
     values:
-      - [8, 8, 8]
-      - [8, 8, 16]
-      - [8, 8, 32]
-      - [8, 8, 64]
-      - [8, 16, 16]
-      - [8, 16, 32]
       - [8, 16, 64]
-      - [8, 16, 128]
-      - [16, 16, 32]
-      - [16, 16, 64]
-      - [16, 32, 32]
-      - [16, 32, 64]
-      - [16, 32, 128]
-      - [16, 64, 64]
-      - [16, 64, 128]
-      - [32, 32, 64]
-      - [32, 64, 128]
-      - [32, 128, 128]
-      - [64, 64, 128]
-      - [8, 8, 8, 8]
-      - [8, 8, 16, 16]
-      - [8, 8, 32, 32]
-      - [8, 8, 64, 64]
-      - [8, 16, 16, 32]
-      - [8, 16, 32, 64]
-      - [8, 16, 64, 128]
-      - [8, 16, 128, 128]
-      - [16, 16, 32, 64]
-      - [16, 16, 64, 128]
-      - [16, 32, 32, 64]
-      - [16, 32, 64, 128]
-      - [16, 32, 128, 128]
-      - [16, 64, 64, 128]
+      - [12, 24, 96]
   layers_per_block:
-    values: [1, 2, 3, 4]
+    values: [1, 2, 3]
   gated:
-    value: false
+    values: [true, false]
+  non_linearity:
+    values: ["n_relu", "n_softplus"]
   kernel_size:
     values: [3, 5]
   pool_stride:
-    values: [2]
+    value: 2
   pool_sigma:
-    values: [0.66]
+    values: [0.5, 0.66, 0.9]
   invariant_channels:
     values: [64, 128]
   use_bn:
-    values: [true]
-  non_linearity:
-    values: ["n_relu", "n_softplus", "n_sigmoid"]
-  epochs:
-    value: 50
+    value: true
+
+  # fixed for MNIST
   n_classes:
     value: 10
-  patience:
-    value: 5

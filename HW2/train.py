@@ -30,6 +30,7 @@ class LitHnn(L.LightningModule):
                  use_bn=True,
                  non_linearity='n_relu',
                  lr=0.001,
+                 weight_decay=0.01,
                  ):
         super().__init__()
 
@@ -78,8 +79,8 @@ class LitHnn(L.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        opt = optim.AdamW(self.parameters(), lr=self.lr)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=5)
+        opt = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=weight_decay)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=5, )
 
         return {
             "optimizer": opt,
@@ -109,6 +110,7 @@ def train(config=None):
             use_bn=config.use_bn,
             non_linearity=config.non_linearity,
             lr=config.lr,
+            weight_decay=config.weight_decay
         )
 
         chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
