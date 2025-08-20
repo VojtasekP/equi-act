@@ -21,7 +21,7 @@ class LitHnn(L.LightningModule):
                  n_classes=10,
                  max_rot_order=2,
                  channels_per_block=(8, 16, 128),          # number of channels per block
-                 layers_per_block=(2, 2, 2),     # depth per block
+                 layers_per_block=2,     # depth per block
                  gated=True,                     # switch between gated vs norm blocks
                  kernel_size=5,
                  pool_stride=2,

@@ -13,6 +13,7 @@ def make_gated_block(act, in_type: nn.FieldType, irrep_repr, channels: int,
         feature_repr = irrep_repr * channels
         feature_type = nn.FieldType(act, feature_repr)
 
+
         gate_repr = [act.trivial_repr] * len(feature_repr)
         full_type = nn.FieldType(act, gate_repr + feature_repr)
 
@@ -59,7 +60,7 @@ class HNet(torch.nn.Module):
                  n_classes=10,
                  max_rot_order=2,
                  channels_per_block=(8, 16, 128),          # number of channels per block
-                 layers_per_block=(2, 2, 2),     # depth per block
+                 layers_per_block=2,             # depth per block
                  gated=True,                     # switch between gated vs norm blocks
                  kernel_size=5,
                  pool_stride=2,
@@ -69,7 +70,6 @@ class HNet(torch.nn.Module):
                  non_linearity='n_relu'):
         super().__init__()
 
-        assert len(channels_per_block) == len(layers_per_block), "channels and layers_per_block must align"
 
         self.r2_act = gspaces.rot2dOnR2(-1, maximum_frequency=max_rot_order)
         self.irreps = [self.r2_act.irrep(m) for m in range(max_rot_order + 1)]
@@ -77,13 +77,13 @@ class HNet(torch.nn.Module):
         cur_type = self.input_type
         self.blocks = torch.nn.ModuleList()
         self.pools = torch.nn.ModuleList()
-        for i, (channels, depth) in enumerate(zip(channels_per_block, layers_per_block)):
+        for i, channels in enumerate(channels_per_block):
             if gated:
                 block, cur_type = make_gated_block(act=self.r2_act,
                                                    in_type=cur_type,
                                                    irrep_repr=self.irreps,
                                                    channels=channels,
-                                                   layers_num=depth,
+                                                   layers_num=layers_per_block,
                                                    kernel_size=kernel_size,
                                                    pad=(kernel_size-1) // 2,
                                                    use_bn=use_bn)
@@ -93,7 +93,7 @@ class HNet(torch.nn.Module):
                                                   in_type=cur_type,
                                                   irrep_repr=self.irreps,
                                                   channels=channels,
-                                                  layers_num=depth,
+                                                  layers_num=layers_per_block,
                                                   kernel_size=kernel_size,
                                                   pad=(kernel_size-1) // 2,
                                                   use_bn=use_bn,
