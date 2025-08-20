@@ -37,6 +37,7 @@ class LitHnn(L.LightningModule):
         self.save_hyperparameters()
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self.lr = lr
+        self.weight_decay = weight_decay
         self.model = HNet(n_classes=n_classes,
                           max_rot_order=max_rot_order,
                           channels_per_block=channels_per_block,
@@ -79,7 +80,7 @@ class LitHnn(L.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        opt = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=weight_decay)
+        opt = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=5, )
 
         return {
