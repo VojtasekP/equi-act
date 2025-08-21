@@ -94,7 +94,7 @@ def train(config=None):
     with wandb.init(config=config):
         config = wandb.config
 
-        logger = WandbLogger(project='research_task_hws', name='hnet')
+        logger = WandbLogger(project='HNet_gated', name='hnet')
 
         datamodule = MnistRotDataModule(batch_size=config.batch_size)
 
