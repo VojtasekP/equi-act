@@ -6,7 +6,7 @@ metric:
 
 early_terminate:
   type: hyperband
-  min_iter: 3
+  min_iter: 5
 
 parameters:
   # --- optimization ---
@@ -32,20 +32,39 @@ parameters:
     values: [1, 2, 3, 4]          # 4 widens space; watch compute
   channels_per_block:
     values:
-      - [4, 8, 32]                # tiny
-      - [8, 8, 8]                 # narrow/deep-ish
-      - [8, 16, 64]
-      - [12, 24, 96]
-      - [16, 32, 128]
-      - [24, 48, 128]
+      - [32, 32, 32]
+      - [32, 32, 64]
+      - [32, 64, 64]
+      - [64, 64, 64]
+      - [64, 64, 128]
+      - [64, 128, 128]
+      - [128, 128, 128]
+      - [128, 128, 256]
+      - [128, 256, 256]
+      - [256, 256, 256]
+      - [256, 256, 512]
+      - [256, 256, 512]
       - [32, 64, 128]
-      - [32, 64, 256]
-      - [48, 96, 192]
-      - [64, 128, 256]            # beefy; keep an eye on memory
+      - [64, 128, 256]
+      - [128, 256, 512]
+      - [32, 32, 32, 32]
+      - [32, 32, 32, 64]
+      - [32, 32, 64, 64]
+      - [32, 64, 64, 64]
+      - [64, 64, 64, 128]
+      - [64, 64, 128, 128]
+      - [64, 128, 128, 128]
+      - [128, 128, 128, 128]
+      - [128, 128, 128, 256]
+      - [128, 128, 256, 256]
+      - [32, 64, 128, 256]
+      - [64, 64, 128, 256]
+      - [64, 64, 256, 256]
+      - [64, 64, 256, 256]
   layers_per_block:
     values: [1, 2, 3, 4]          # adds depth options; 2–3 usually sweet spot
   gated:
-    values: [true, false]
+    value: true
   non_linearity:
     values: ["n_relu", "n_softplus"]   # only matters when gated=false
   kernel_size:
