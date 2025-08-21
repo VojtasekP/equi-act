@@ -66,8 +66,7 @@ parameters:
   gated:
     value: true
   non_linearity:
-#    values: ["n_relu", "n_softplus"]   # only matters when gated=false
-    value: "none"
+    values: ["n_relu", "n_softplus"]   # only matters when gated=false
   kernel_size:
     values: [3, 5]
   pool_stride:
