@@ -9,19 +9,22 @@ early_terminate:
   min_iter: 5
 
 parameters:
-  # --- optimization ---
+  dataset:
+    value: resisc45
+  img_size:
+    values: [32, 64, 128, 256]
   lr:
     distribution: log_uniform_values
     min: 0.00005
-    max: 0.02        # wider than before; AdamW rarely needs >1e-2, but let Bayes try
+    max: 0.02
   weight_decay:
     distribution: log_uniform_values
     min: 0.000001
-    max: 0.05        # let it test stronger decay; AdamW can benefit on MNIST-rot
+    max: 0.05
 
   # --- data / training ---
   batch_size:
-    values: [64, 128, 256, 512]   # 512 often works on MNIST; drop if you OOM
+    values: [16]
   epochs:
     value: 50
   patience:
@@ -29,7 +32,7 @@ parameters:
 
   # --- model ---
   max_rot_order:
-    values: [1, 2, 3, 4]          # 4 widens space; watch compute
+    values: [1, 2, 3, 4]
   channels_per_block:
     values:
       - [32, 32, 32]
@@ -62,22 +65,22 @@ parameters:
       - [64, 64, 256, 256]
       - [64, 64, 256, 256]
   layers_per_block:
-    values: [1, 2, 3, 4]          # adds depth options; 2–3 usually sweet spot
+    values: [1, 2, 3, 4]
   gated:
     value: true
   non_linearity:
-    values: ["n_relu", "n_softplus"]   # only matters when gated=false
+    value: "none"
   kernel_size:
     values: [3, 5]
   pool_stride:
     value: 2
   pool_sigma:
-    values: [0.5, 0.66, 0.9, 1.2]      # slightly wider
+    values: [0.5, 0.66, 0.9, 1.2]
   invariant_channels:
-    values: [32, 64, 128, 256]         # let head width move; 128–256 often best
+    values: [32, 64, 128, 256]
   use_bn:
     value: true
 
   # fixed for MNIST
   n_classes:
-    value: 10
+    value: 45

@@ -5,7 +5,7 @@ from torchvision.transforms import Resize
 from torchvision.transforms import ToTensor
 from torchvision.transforms import Compose
 from torchvision.transforms import InterpolationMode
-from HW1.mnist_rot import MnistRotDataset
+from HNet.datasets_utils.data_classes import MnistRotDataset
 import random
 import keyboard  # Install with `pip install keyboard`
 

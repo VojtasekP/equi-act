@@ -67,13 +67,17 @@ class HNet(torch.nn.Module):
                  pool_sigma=0.66,
                  invariant_channels=64,
                  use_bn=True,
-                 non_linearity='n_relu'):
+                 non_linearity='n_relu',
+                 grey_scale=False):
         super().__init__()
 
 
         self.r2_act = gspaces.rot2dOnR2(-1, maximum_frequency=max_rot_order)
         self.irreps = [self.r2_act.irrep(m) for m in range(max_rot_order + 1)]
-        self.input_type = nn.FieldType(self.r2_act, [self.r2_act.trivial_repr])
+        if grey_scale:
+            self.input_type = nn.FieldType(self.r2_act, [self.r2_act.trivial_repr])
+        else:
+            self.input_type = nn.FieldType(self.r2_act, 3*[self.r2_act.trivial_repr])
         cur_type = self.input_type
         self.blocks = torch.nn.ModuleList()
         self.pools = torch.nn.ModuleList()

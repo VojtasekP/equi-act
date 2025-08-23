@@ -1,6 +1,3 @@
-import os
-from typing import Any
-
 import torchmetrics
 from lightning import Trainer
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
@@ -14,18 +11,10 @@ torch.set_float32_matmul_precision('high')
 from escnn import gspaces
 from escnn import nn
 
-from torchvision.transforms import RandomRotation
-from torchvision.transforms import Pad
-from torchvision.transforms import Resize
-from torchvision.transforms import ToTensor
-from torchvision.transforms import Compose
-from torchvision.transforms import InterpolationMode
-
-
 import lightning as L
 from pytorch_lightning.loggers import WandbLogger
 
-from mnist_rot import MnistRotDataset, MnistRotDataModule
+from HNet.datasets_utils.data_classes import MnistRotDataModule
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # download the dataset

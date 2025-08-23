@@ -1,0 +1,84 @@
+program: train.py
+method: bayes
+metric:
+  name: val_loss
+  goal: minimize
+
+early_terminate:
+  type: hyperband
+  min_iter: 5
+
+parameters:
+  dataset: mnist
+  lr:
+    distribution: log_uniform_values
+    min: 0.00005
+    max: 0.02        # wider than before; AdamW rarely needs >1e-2, but let Bayes try
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.000001
+    max: 0.05        # let it test stronger decay; AdamW can benefit on MNIST-rot
+
+  # --- data / training ---
+  batch_size:
+    values: [64, 128, 256, 512]   # 512 often works on MNIST; drop if you OOM
+  epochs:
+    value: 50
+  patience:
+    value: 5
+
+  # --- model ---
+  max_rot_order:
+    values: [1, 2, 3, 4]          # 4 widens space; watch compute
+  channels_per_block:
+    values:
+      - [32, 32, 32]
+      - [32, 32, 64]
+      - [32, 64, 64]
+      - [64, 64, 64]
+      - [64, 64, 128]
+      - [64, 128, 128]
+      - [128, 128, 128]
+      - [128, 128, 256]
+      - [128, 256, 256]
+      - [256, 256, 256]
+      - [256, 256, 512]
+      - [256, 256, 512]
+      - [32, 64, 128]
+      - [64, 128, 256]
+      - [128, 256, 512]
+      - [32, 32, 32, 32]
+      - [32, 32, 32, 64]
+      - [32, 32, 64, 64]
+      - [32, 64, 64, 64]
+      - [64, 64, 64, 128]
+      - [64, 64, 128, 128]
+      - [64, 128, 128, 128]
+      - [128, 128, 128, 128]
+      - [128, 128, 128, 256]
+      - [128, 128, 256, 256]
+      - [32, 64, 128, 256]
+      - [64, 64, 128, 256]
+      - [64, 64, 256, 256]
+      - [64, 64, 256, 256]
+  layers_per_block:
+    values: [1, 2, 3, 4]          # adds depth options; 2–3 usually sweet spot
+  gated:
+    value: true
+  non_linearity:
+#    values: ["n_relu", "n_softplus"]   # only matters when gated=false
+    value: "none"
+  kernel_size:
+    values: [3, 5]
+  pool_stride:
+    value: 2
+  pool_sigma:
+    values: [0.5, 0.66, 0.9, 1.2]      # slightly wider
+  invariant_channels:
+    values: [32, 64, 128, 256]         # let head width move; 128–256 often best
+  use_bn:
+    value: true
+
+  # fixed for MNIST
+  n_classes:
+    value: 10
