@@ -4,9 +4,7 @@ metric:
   name: val_loss
   goal: minimize
 
-early_terminate:
-  type: hyperband
-  min_iter: 20
+
 
 parameters:
   project:
@@ -30,7 +28,7 @@ parameters:
 
   # --- data / training ---
   batch_size:
-    value: 64
+    value: 32
   epochs:
     value: 300
   patience:

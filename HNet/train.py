@@ -135,12 +135,13 @@ def _train_impl(config):
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
                             save_top_k=1, mode='min')
+    early = EarlyStopping(monitor='val_loss', mode='min', patience=config.patience, verbose=True)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
     trainer = Trainer(
         max_epochs=config.epochs,
         logger=logger,
-        callbacks=[chkpt, lr_monitor],
+        callbacks=[early, chkpt, lr_monitor],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         precision="16-mixed",
