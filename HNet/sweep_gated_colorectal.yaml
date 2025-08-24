@@ -3,9 +3,15 @@ method: bayes
 metric:
   name: val_loss
   goal: minimize
-
+early_terminate:
+  type: hyperband
+  min_iter: 15
 
 parameters:
+  project:
+    value: Colorectal_hist
+  name:
+    value: hnet_gated
   dataset:
     value: colorectal_hist
   gray_scale:
@@ -25,7 +31,7 @@ parameters:
   batch_size:
     value: 64
   epochs:
-    value: 50
+    value: 150
   patience:
     value: 5
 

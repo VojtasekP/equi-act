@@ -4,8 +4,15 @@ metric:
   name: val_loss
   goal: minimize
 
+early_terminate:
+  type: hyperband
+  min_iter: 20
 
 parameters:
+  project:
+    value: Resisc45
+  name:
+    value: hnet_gated
   dataset:
     value: resisc45
   img_size:
@@ -25,7 +32,7 @@ parameters:
   batch_size:
     value: 64
   epochs:
-    value: 50
+    value: 300
   patience:
     value: 5
 

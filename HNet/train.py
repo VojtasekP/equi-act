@@ -92,18 +92,9 @@ class LitHnn(L.LightningModule):
         }
 
 
-def train(config=None):
-    if wandb.run is None:
-        with wandb.init(config=config):
-            config = wandb.config
-            _train_impl(config)
-    else:
-        config = wandb.config if config is None else config
-        _train_impl(config)
-
 
 def _train_impl(config):
-    logger = WandbLogger(project='HNet_gated', name='hnet')
+    logger = WandbLogger(project=config.project, name=config.name)
 
     dataset = getattr(config, "dataset", "mnist_rot")
     if dataset == "mnist_rot":
@@ -143,13 +134,17 @@ def _train_impl(config):
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
                             save_top_k=1, mode='min')
-    early = EarlyStopping(monitor='val_loss', mode='min', patience=10)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-    trainer = Trainer(
+    Trainer(
         max_epochs=config.epochs,
         logger=logger,
-        callbacks=[early, chkpt, lr_monitor]
+        callbacks=[chkpt, lr_monitor],
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=1,
+        precision="16-mixed",
+        deterministic=False,
+        benchmark=True
     )
 
     trainer.fit(model, datamodule=datamodule)
