@@ -94,6 +94,7 @@ class LitHnn(L.LightningModule):
 
 
 def _train_impl(config):
+    print("Config:", config)
     logger = WandbLogger(project=config.project, name=config.name)
 
     dataset = getattr(config, "dataset", "mnist_rot")
@@ -164,6 +165,8 @@ def train(config=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--project", type=str, default="research_task_hws")
+    parser.add_argument("--name", type=str, default="HNet_experiment")
     parser.add_argument("--dataset", type=str, default="mnist_rot",
                         choices=["mnist_rot", "resisc45", "colorectal_hist"])
     parser.add_argument("--epochs", type=int, default=20)
