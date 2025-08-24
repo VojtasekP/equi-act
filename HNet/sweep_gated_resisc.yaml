@@ -24,9 +24,9 @@ parameters:
 
   # --- data / training ---
   batch_size:
-    values: [16]
+    values: [32]
   epochs:
-    value: 50
+    value: 40
   patience:
     value: 5
 
