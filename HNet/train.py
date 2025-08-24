@@ -137,7 +137,7 @@ def _train_impl(config):
                             save_top_k=1, mode='min')
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-    Trainer(
+    trainer = Trainer(
         max_epochs=config.epochs,
         logger=logger,
         callbacks=[chkpt, lr_monitor],
