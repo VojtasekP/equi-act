@@ -31,7 +31,7 @@ parameters:
   epochs:
     value: 150
   patience:
-    value: 5
+    value: 15
 
   # --- model ---
   max_rot_order:

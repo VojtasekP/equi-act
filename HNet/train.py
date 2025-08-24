@@ -135,7 +135,7 @@ def _train_impl(config):
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
                             save_top_k=1, mode='min')
-    early = EarlyStopping(monitor='val_loss', mode='min', patience=config.patience, verbose=True)
+    early = EarlyStopping(monitor='val_loss', mode='min', patience=config.patience, verbose=True, min_delta=0.001)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
     trainer = Trainer(
