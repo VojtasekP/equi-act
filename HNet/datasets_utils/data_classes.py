@@ -50,7 +50,6 @@ class MnistRotDataModule(L.LightningDataModule):
         self.train_transform = Compose([
             Pad((0, 0, 1, 1), fill=0),  # Pad the image
             Resize(87),  # Upscale
-            RandomRotation(180.0, interpolation=InterpolationMode.BILINEAR, expand=False),  # Random rotate
             Resize(29),  # Downscale back
             ToTensor(),  # Convert to tensor
         ])
@@ -135,7 +134,6 @@ def make_transforms(img_size: int) -> Tuple[Compose, Compose]:
 
     train_tf = Compose([
         RandomResizedCrop(img_size, scale=(0.8, 1.0)),
-        RandomRotation(180.0, interpolation=InterpolationMode.BILINEAR, expand=False),
         ToTensor()
     ])
 

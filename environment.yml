@@ -101,7 +101,6 @@ dependencies:
   - traitlets=5.14.3=py310h06a4308_0
   - typing-extensions=4.12.2=py310h06a4308_0
   - typing_extensions=4.12.2=py310h06a4308_0
-  - tzdata=2025a=h04d1e81_0
   - wcwidth=0.2.13=py310h06a4308_0
   - webencodings=0.5.1=py310h06a4308_1
   - websocket-client=1.8.0=py310h06a4308_0
@@ -123,6 +122,8 @@ dependencies:
       - click==8.1.8
       - contourpy==1.3.2
       - cycler==0.12.1
+      - datasets==4.0.0
+      - dill==0.3.8
       - docker-pycreds==0.4.0
       - einops==0.8.1
       - escnn==1.0.11
@@ -132,6 +133,8 @@ dependencies:
       - fsspec==2025.3.0
       - gitdb==4.0.12
       - gitpython==3.1.44
+      - hf-xet==1.1.8
+      - huggingface-hub==0.34.4
       - idna==3.10
       - joblib==1.4.2
       - kiwisolver==1.4.8
@@ -141,6 +144,7 @@ dependencies:
       - matplotlib==3.10.3
       - mpmath==1.3.0
       - multidict==6.1.0
+      - multiprocess==0.70.16
       - networkx==3.4.2
       - numpy==1.26.4
       - nvidia-cublas-cu12==12.4.5.8
@@ -156,17 +160,20 @@ dependencies:
       - nvidia-nccl-cu12==2.21.5
       - nvidia-nvjitlink-cu12==12.4.127
       - nvidia-nvtx-cu12==12.4.127
+      - pandas==2.3.2
       - pillow==11.1.0
       - platformdirs==4.3.6
       - propcache==0.3.0
       - protobuf==5.29.3
       - psutil==7.0.0
       - py3nj==0.2.1
+      - pyarrow==21.0.0
       - pydantic==2.10.6
       - pydantic-core==2.27.2
       - pymanopt==2.2.1
       - pyparsing==3.2.3
       - pytorch-lightning==2.5.0.post0
+      - pytz==2025.2
       - requests==2.32.3
       - scipy==1.15.2
       - sentry-sdk==2.22.0
@@ -179,7 +186,9 @@ dependencies:
       - torchvision==0.21.0
       - tqdm==4.67.1
       - triton==3.2.0
+      - tzdata==2025.2
       - urllib3==2.3.0
       - wandb==0.19.8
+      - xxhash==3.5.0
       - yarl==1.18.3
 prefix: /home/petr/anaconda3/envs/equi-act
