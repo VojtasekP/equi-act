@@ -188,19 +188,8 @@ if __name__ == "__main__":
     parser.add_argument("--img_size", type=int, default=28)
     parser.add_argument("--n_classes", type=int, default=10)
     parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--gray_scale", type=bool, default=True)
     args = parser.parse_args()
 
     config = vars(args)
-    config.update({
-        "max_rot_order": 3,
-        "channels_per_block": [16, 32, 64],
-        "layers_per_block": 2,
-        "gated": True,
-        "kernel_size": 3,
-        "pool_stride": 2,
-        "pool_sigma": 1.0,
-        "invariant_channels": 8,
-        "use_bn": True,
-        "non_linearity": "relu",
-    })
     train(config)

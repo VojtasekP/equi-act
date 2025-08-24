@@ -4,15 +4,14 @@ metric:
   name: val_loss
   goal: minimize
 
-early_terminate:
-  type: hyperband
-  min_iter: 5
 
 parameters:
   dataset:
     value: resisc45
   img_size:
     values: [32, 64, 128, 256]
+  gray_scale:
+    value: false
   lr:
     distribution: log_uniform_values
     min: 0.00005
@@ -24,9 +23,9 @@ parameters:
 
   # --- data / training ---
   batch_size:
-    values: [32]
+    value: 64
   epochs:
-    value: 40
+    value: 50
   patience:
     value: 5
 

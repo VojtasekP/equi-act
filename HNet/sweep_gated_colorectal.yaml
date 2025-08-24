@@ -4,13 +4,12 @@ metric:
   name: val_loss
   goal: minimize
 
-early_terminate:
-  type: hyperband
-  min_iter: 5
 
 parameters:
   dataset:
     value: colorectal_hist
+  gray_scale:
+    value: false
   img_size:
     values: [150, 125, 100, 75, 50]
   lr:
@@ -26,7 +25,7 @@ parameters:
   batch_size:
     value: 64
   epochs:
-    value: 40
+    value: 50
   patience:
     value: 5
 

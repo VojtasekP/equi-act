@@ -4,12 +4,14 @@ metric:
   name: val_loss
   goal: minimize
 
-early_terminate:
-  type: hyperband
-  min_iter: 5
 
 parameters:
-  dataset: mnist
+  dataset:
+    value: mnist
+  gray_scale:
+    value: true
+  img_size:
+    value: 28
   lr:
     distribution: log_uniform_values
     min: 0.00005
