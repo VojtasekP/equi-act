@@ -29,11 +29,9 @@ parameters:
 
   # --- model ---
   max_rot_order:
-    values: [1, 2, 3, 4]
+    values: [1, 2, 3]
   channels_per_block:
     values:
-      - [32, 32, 32]
-      - [32, 32, 64]
       - [32, 64, 64]
       - [64, 64, 64]
       - [64, 64, 128]
@@ -42,11 +40,8 @@ parameters:
       - [128, 128, 256]
       - [128, 256, 256]
       - [256, 256, 256]
-      - [256, 256, 512]
-      - [256, 256, 512]
       - [32, 64, 128]
       - [64, 128, 256]
-      - [128, 256, 512]
       - [32, 32, 32, 32]
       - [32, 32, 32, 64]
       - [32, 32, 64, 64]
@@ -62,19 +57,19 @@ parameters:
       - [64, 64, 256, 256]
       - [64, 64, 256, 256]
   layers_per_block:
-    values: [1, 2, 3, 4]          # adds depth options; 2–3 usually sweet spot
+    values: [1, 2, 3]
   gated:
     value: true
   non_linearity:
-    values: ["n_relu", "n_softplus"]   # only matters when gated=false
+    values: ["n_relu", "n_softplus"]
   kernel_size:
     values: [3, 5]
   pool_stride:
     value: 2
   pool_sigma:
-    values: [0.5, 0.66, 0.9, 1.2]      # slightly wider
+    values: [0.5, 0.66, 0.9, 1.2]
   invariant_channels:
-    values: [32, 64, 128, 256]         # let head width move; 128–256 often best
+    values: [32, 64, 128, 256]
   use_bn:
     value: true
 

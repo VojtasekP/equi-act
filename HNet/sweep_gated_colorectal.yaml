@@ -4,6 +4,11 @@ metric:
   name: val_loss
   goal: minimize
 
+early_terminate:
+  type: hyperband
+  min_iter: 5
+  eta: 3
+
 
 parameters:
   project:
@@ -15,7 +20,7 @@ parameters:
   gray_scale:
     value: false
   img_size:
-    values: [150, 125, 100, 75, 50]
+    values: [150, 125, 100]
   lr:
     distribution: log_uniform_values
     min: 0.00005
@@ -31,15 +36,13 @@ parameters:
   epochs:
     value: 150
   patience:
-    value: 15
+    value: 8
 
   # --- model ---
   max_rot_order:
-    values: [1, 2, 3, 4]
+    values: [1, 2, 3]
   channels_per_block:
     values:
-      - [32, 32, 32]
-      - [32, 32, 64]
       - [32, 64, 64]
       - [64, 64, 64]
       - [64, 64, 128]
@@ -48,27 +51,11 @@ parameters:
       - [128, 128, 256]
       - [128, 256, 256]
       - [256, 256, 256]
-      - [256, 256, 512]
-      - [256, 256, 512]
       - [32, 64, 128]
       - [64, 128, 256]
       - [128, 256, 512]
-      - [32, 32, 32, 32]
-      - [32, 32, 32, 64]
-      - [32, 32, 64, 64]
-      - [32, 64, 64, 64]
-      - [64, 64, 64, 128]
-      - [64, 64, 128, 128]
-      - [64, 128, 128, 128]
-      - [128, 128, 128, 128]
-      - [128, 128, 128, 256]
-      - [128, 128, 256, 256]
-      - [32, 64, 128, 256]
-      - [64, 64, 128, 256]
-      - [64, 64, 256, 256]
-      - [64, 64, 256, 256]
   layers_per_block:
-    values: [1, 2, 3, 4]
+    values: [1, 2, 3]
   gated:
     value: true
   non_linearity:
@@ -83,7 +70,5 @@ parameters:
     values: [32, 64, 128, 256]
   use_bn:
     value: true
-
-  # fixed for MNIST
   n_classes:
     value: 8
