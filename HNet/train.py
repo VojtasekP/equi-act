@@ -150,7 +150,7 @@ def _train_impl(config):
     )
 
     trainer.fit(model, datamodule=datamodule)
-    trainer.test(model=None, datamodule=datamodule, ckpt_path="best")
+    test_metrics = trainer.test(model=None, datamodule=datamodule, ckpt_path="best")
     tm = test_metrics[0] if isinstance(test_metrics, list) and len(test_metrics) else {}
     return {
         "best_val_acc": ckpt_acc.best_model_score.item() if ckpt_acc.best_model_score is not None else None,
