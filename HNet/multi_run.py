@@ -71,7 +71,7 @@ def main():
         best_vals.append(out.get("best_val_acc"))
         paths.append(out["best_ckpt"])
 
-        print(f"[seed={seed}] test_acc={out['test_acc']:.4f} | best_val_acc={out.get('best_val_acc', float('nan')):.4f}}")
+        print(f"[seed={seed}] test_acc={out['test_acc']:.4f} | best_val_acc={out.get('best_val_acc', float('nan')):.4f}")
 
     # 4) Aggregate results
     accs_np = np.array(accs, dtype=float)
