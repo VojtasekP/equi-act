@@ -150,12 +150,19 @@ def _train_impl(config):
     )
 
     trainer.fit(model, datamodule=datamodule)
-    test_metrics = trainer.test(model=None, datamodule=datamodule, ckpt_path="best")
+    best_ckpt_path = chkpt.best_model_path or None
+    best_val_loss = float(chkpt.best_model_score.item()) if chkpt.best_model_score is not None else None
+
+    if best_ckpt_path:
+        test_metrics = trainer.test(model=None, datamodule=datamodule, ckpt_path=best_ckpt_path)
+    else:
+        test_metrics = trainer.test(model=None, datamodule=datamodule)
+
     tm = test_metrics[0] if isinstance(test_metrics, list) and len(test_metrics) else {}
+
     return {
-        "best_val_acc": ckpt_acc.best_model_score.item() if ckpt_acc.best_model_score is not None else None,
-        "best_val_loss": ckpt_loss.best_model_score.item() if ckpt_loss.best_model_score is not None else None,
-        "best_acc_ckpt": best_acc_path,
+        "best_val_loss": best_val_loss,
+        "best_ckpt": best_ckpt_path,
         "test_acc": float(tm.get("test_acc", float("nan"))),
         "test_loss": float(tm.get("test_loss", float("nan")))
     }
