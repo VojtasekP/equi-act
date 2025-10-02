@@ -1,8 +1,6 @@
 import torch
 from escnn import gspaces, nn
 
-
-
 def make_gated_block(act, in_type: nn.FieldType, irrep_repr, channels: int,
                     layers_num: int, kernel_size: int = 5, pad: int = 2,
                     use_bn: bool = True):
@@ -52,6 +50,22 @@ def make_norm_block(act, in_type: nn.FieldType, irrep_repr, channels: int,
 
     return nn.SequentialModule(*layers), cur_type
 
+def make_fourier_block(act, in_type: nn.FieldType, irrep_repr, channels: int,
+                     layers_num: int, kernel_size: int = 5, pad: int = 2,
+                     use_bn: bool = True):
+    layers = []
+    cur_type = in_type
+    for _ in range(layers_num):
+        feature_repr = irrep_repr * channels
+        feature_type = nn.FieldType(act, feature_repr)
+
+        layers.append(nn.R2Conv(cur_type, feature_type, kernel_size=kernel_size, padding=pad, bias=False))
+
+        if use_bn:
+            layers.append(nn.IIDBatchNorm2d(feature_type))
+
+        layers.append(nn.QuotientFourierPointwise(feature_type))
+        cur_type = feature_type
 
 
 
@@ -96,7 +110,7 @@ class HNet(torch.nn.Module):
                 block, cur_type = make_norm_block(act=self.r2_act,
                                                   in_type=cur_type,
                                                   irrep_repr=self.irreps,
-                                                  channels=channels,
+                                                  channels=channels,26
                                                   layers_num=layers_per_block,
                                                   kernel_size=kernel_size,
                                                   pad=(kernel_size-1) // 2,
@@ -117,7 +131,15 @@ class HNet(torch.nn.Module):
         self.head = torch.nn.Sequential(
             torch.nn.BatchNorm1d(c),
             torch.nn.ELU(inplace=True),
-            torch.nn.Linear(c, n_classes),
+            torch.nn.Linear(c, c//2),
+
+            torch.nn.BatchNorm1d(c),
+            torch.nn.ELU(inplace=True),
+            torch.nn.Linear(c//2, c//4),
+
+            torch.nn.BatchNorm1d(c),
+            torch.nn.ELU(inplace=True),
+            torch.nn.Linear(c//4, n_classes),
         )
 
     def forward(self, input: torch.Tensor):

@@ -4,8 +4,8 @@ dataset: resisc45
 
 epochs: 120
 batch_size: 32
-lr: 0.0006
-weight_decay: 0.0047
+lr: 0.0005968
+weight_decay: 0.0047469
 patience: 8
 
 channels_per_block: [32, 64, 128]
