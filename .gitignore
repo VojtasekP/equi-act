@@ -9,3 +9,4 @@ research_task_hws/
 logs/
 *.pbs
 .vscode/
+ModelNet10/

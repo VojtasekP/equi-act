@@ -1,0 +1,19 @@
+Metadata-Version: 2.4
+Name: equi-act
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: ==3.10.*
+Description-Content-Type: text/markdown
+Requires-Dist: datasets>=4.1.1
+Requires-Dist: escnn>=1.0.11
+Requires-Dist: lightning>=2.5.5
+Requires-Dist: numpy>=1.26.4
+Requires-Dist: pytest>=8.4.2
+Requires-Dist: scipy==1.10.*
+Requires-Dist: torch>=2.8.0
+Requires-Dist: torchaudio>=2.8.0
+Requires-Dist: torchmetrics>=1.8.2
+Requires-Dist: torchvision>=0.23.0
+Requires-Dist: wandb>=0.22.0
+
+# equi-act

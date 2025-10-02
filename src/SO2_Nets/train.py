@@ -10,7 +10,7 @@ import lightning as L
 from lightning.pytorch.loggers import WandbLogger
 
 import wandb
-from HNet import HNet
+from SO2_Nets.HNet import HNet
 from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule
 import argparse
 
@@ -99,7 +99,7 @@ def _train_impl(config):
 
     dataset = getattr(config, "dataset", "mnist_rot")
     if dataset == "mnist_rot":
-        datamodule = MnistRotDataModule(batch_size=config.batch_size)
+        datamodule = MnistRotDataModule(batch_size=config.batch_size, data_dir="/home/petr/Documents/research_task/equi-act/datasets_utils/mnist_rotation_new")
         n_classes_dm = getattr(datamodule, "num_classes", getattr(config, "n_classes", None))
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
@@ -122,7 +122,8 @@ def _train_impl(config):
         max_rot_order=config.max_rot_order,
         channels_per_block=config.channels_per_block,
         layers_per_block=config.layers_per_block,
-        gated=config.gated,
+        activation_type=config.activation_type,
+        activation=config.activation,
         kernel_size=config.kernel_size,
         pool_stride=config.pool_stride,
         pool_sigma=config.pool_sigma,
@@ -191,12 +192,13 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--channels_per_block", default=[16, 32, 64])
     parser.add_argument("--layers_per_block", default=2)
-    parser.add_argument("--gated", default=True)
+    parser.add_argument("--activation_type", default="gated", choices=["gated, norm, pointwise, fourier"])
+    parser.add_argument("--activation", default="gated", choices=["relu, elu, sqash"])
     parser.add_argument("--kernel_size", type=int, default=3)
     parser.add_argument("--pool_stride", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=1.0)
     parser.add_argument("--invariant_channels", type=int, default=8)
-    parser.add_argument("--use_bn", default=True)
+    parser.add_argument("--bn", default="iidbn")
     parser.add_argument("--non_linearity", type=str, default="relu")
     parser.add_argument("--max_rot_order", type=float, default=3)
     parser.add_argument("--img_size", type=int, default=28)

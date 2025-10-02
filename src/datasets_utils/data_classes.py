@@ -1,6 +1,6 @@
 import os
 from typing import Tuple
-
+from pathlib import Path
 import lightning as L
 import numpy as np
 import torch
@@ -15,16 +15,17 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 class MnistRotDataset(Dataset):
 
-    def __init__(self, mode, transform=None):
+    def __init__(self, mode, transform=None, data_dir=None):
         assert mode in ['train', 'test']
 
-        if mode == "train":
-            file = "/mnist_rotation_new/mnist_all_rotation_normalized_float_train_valid.amat"
-        else:
-            file = "/mnist_rotation_new/mnist_all_rotation_normalized_float_test.amat"
-
         self.transform = transform
-
+        root = Path(data_dir) if data_dir else (Path(__file__).resolve().parents[1] / "SO2_Nets" / "datasets_utils" / "mnist_rotation_new")
+        if mode == 'train':
+            file = root / "mnist_all_rotation_normalized_float_train_valid.amat"
+        elif mode == 'test':
+            file = root / "mnist_all_rotation_normalized_float_test.amat"
+        else:
+            raise ValueError("mode must be 'train' or 'test'")
         data = np.loadtxt(file, delimiter=' ')
 
         self.images = data[:, :-1].reshape(-1, 28, 28).astype(np.float32)
@@ -43,9 +44,10 @@ class MnistRotDataset(Dataset):
 
 
 class MnistRotDataModule(L.LightningDataModule):
-    def __init__(self, batch_size=64):
+    def __init__(self, batch_size=64, data_dir=None):
         super().__init__()
         self.batch_size = batch_size
+        self.data_dir = data_dir
 
         self.train_transform = Compose([
             Pad((0, 0, 1, 1), fill=0),  # Pad the image
@@ -64,15 +66,13 @@ class MnistRotDataModule(L.LightningDataModule):
 
     def setup(self, stage: str):
         if stage == 'fit':
-            self.mnist_full = MnistRotDataset(mode='train', transform=self.train_transform)
-            self.mnist_train, self.mnist_val = torch.utils.data.random_split(self.mnist_full,
-                                                                             [10000, 2000],
-                                                                             generator=torch.Generator().manual_seed(
-                                                                                 24))
+            self.mnist_full = MnistRotDataset(mode='train', transform=self.train_transform, data_dir=self.data_dir)
+
+            self.mnist_train, self.mnist_val = torch.utils.data.random_split(self.mnist_full, [0.8, 0.2])
         if stage == 'test':
-            self.mnist_test = MnistRotDataset(mode='test', transform=self.test_transform)
+            self.mnist_test = MnistRotDataset(mode='test', transform=self.test_transform, data_dir=self.data_dir)
         if stage == 'predict':
-            self.mnist_predict = MnistRotDataset(mode='test', transform=self.test_transform)
+            self.mnist_predict = MnistRotDataset(mode='test', transform=self.test_transform, data_dir=self.data_dir)
 
     def train_dataloader(self):
         return DataLoader(
