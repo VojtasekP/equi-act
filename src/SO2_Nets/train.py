@@ -16,7 +16,12 @@ import argparse
 
 torch.set_num_threads(os.cpu_count())
 torch.set_float32_matmul_precision('high')
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+# list all available GPUs
+print("Available GPUs:", torch.cuda.device_count(), [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])
+# use second GPU if available
+
+device = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu")
+print("Using device:", device)
 
 
 class LitHnn(L.LightningModule):
@@ -24,16 +29,16 @@ class LitHnn(L.LightningModule):
                  n_classes=10,
                  max_rot_order=2,
                  channels_per_block=(8, 16, 128),          # number of channels per block
-                 layers_per_block=2,     # depth per block
-                 gated=True,                     # switch between gated vs norm blocks
+                 layers_per_block=2,     
                  kernel_size=5,
                  pool_stride=2,
                  pool_sigma=0.66,
                  invariant_channels=64,
-                 use_bn=True,
-                 non_linearity='n_relu',
+                 bn=True,
+                 activation_type="gated_relu",
                  lr=0.001,
                  weight_decay=0.01,
+                 grey_scale=False
                  ):
         super().__init__()
 
@@ -45,13 +50,13 @@ class LitHnn(L.LightningModule):
                           max_rot_order=max_rot_order,
                           channels_per_block=channels_per_block,
                           layers_per_block=layers_per_block,
-                          gated=gated,
                           kernel_size=kernel_size,
                           pool_stride=pool_stride,
                           pool_sigma=pool_sigma,
                           invariant_channels=invariant_channels,
-                          use_bn=use_bn,
-                          non_linearity=non_linearity
+                          bn=bn,
+                          activation_type=activation_type,
+                          grey_scale=grey_scale
                           )
 
         self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
@@ -97,9 +102,10 @@ def _train_impl(config):
     print("Config:", config)
     logger = WandbLogger(project=config.project, name=config.name)
 
-    dataset = getattr(config, "dataset", "mnist_rot")
+    dataset = getattr(config, "dataset", "None")
+
     if dataset == "mnist_rot":
-        datamodule = MnistRotDataModule(batch_size=config.batch_size, data_dir="/home/petr/Documents/research_task/equi-act/datasets_utils/mnist_rotation_new")
+        datamodule = MnistRotDataModule(batch_size=config.batch_size, data_dir="./src/datasets_utils/mnist_rotation_new")
         n_classes_dm = getattr(datamodule, "num_classes", getattr(config, "n_classes", None))
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
@@ -123,15 +129,14 @@ def _train_impl(config):
         channels_per_block=config.channels_per_block,
         layers_per_block=config.layers_per_block,
         activation_type=config.activation_type,
-        activation=config.activation,
         kernel_size=config.kernel_size,
         pool_stride=config.pool_stride,
         pool_sigma=config.pool_sigma,
         invariant_channels=config.invariant_channels,
-        use_bn=config.use_bn,
-        non_linearity=config.non_linearity,
+        bn=config.bn,
         lr=config.lr,
-        weight_decay=config.weight_decay
+        weight_decay=config.weight_decay,
+        grey_scale=config.gray_scale
     )
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
@@ -192,19 +197,17 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--channels_per_block", default=[16, 32, 64])
     parser.add_argument("--layers_per_block", default=2)
-    parser.add_argument("--activation_type", default="gated", choices=["gated, norm, pointwise, fourier"])
-    parser.add_argument("--activation", default="gated", choices=["relu, elu, sqash"])
+    parser.add_argument("--activation_type", default="gated_relu", choices=["gated_relu","norm_relu", "norm_squash", "pointwise_relu","fourier_relu", "fourier_elu"])
     parser.add_argument("--kernel_size", type=int, default=3)
     parser.add_argument("--pool_stride", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=1.0)
-    parser.add_argument("--invariant_channels", type=int, default=8)
-    parser.add_argument("--bn", default="iidbn")
-    parser.add_argument("--non_linearity", type=str, default="relu")
+    parser.add_argument("--invariant_channels", type=int, default=64)
+    parser.add_argument("--bn", default="IIDbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
     parser.add_argument("--max_rot_order", type=float, default=3)
     parser.add_argument("--img_size", type=int, default=28)
     parser.add_argument("--n_classes", type=int, default=10)
     parser.add_argument("--patience", type=int, default=3)
-    parser.add_argument("--gray_scale", type=bool, default=True)
+    parser.add_argument("--gray_scale", type=bool, default=False)
     args = parser.parse_args()
 
     config = vars(args)
