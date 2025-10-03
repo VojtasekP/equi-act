@@ -2,7 +2,7 @@ import requests, zipfile, os
 
 url = "http://www.iro.umontreal.ca/~lisa/icml2007data/mnist_rotation_new.zip"
 zip_path = "mnist_rotation_new.zip"
-out_dir = "mnist_rotation_new"
+out_dir = "src/datasets_utils/mnist_rotation_new"
 
 os.makedirs(out_dir, exist_ok=True)
 
