@@ -107,14 +107,17 @@ def _train_impl(config):
     if dataset == "mnist_rot":
         datamodule = MnistRotDataModule(batch_size=config.batch_size, data_dir="./src/datasets_utils/mnist_rotation_new")
         n_classes_dm = getattr(datamodule, "num_classes", getattr(config, "n_classes", None))
+        grey_scale = True
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
                                         img_size=getattr(config, "img_size", 128))
+        grey_scale = False
         n_classes_dm = datamodule.num_classes
     elif dataset == "colorectal_hist":
         datamodule = ColorectalHistDataModule(batch_size=config.batch_size,
                                               img_size=getattr(config, "img_size", 128))
         n_classes_dm = datamodule.num_classes
+        grey_scale = False
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
@@ -136,7 +139,7 @@ def _train_impl(config):
         bn=config.bn,
         lr=config.lr,
         weight_decay=config.weight_decay,
-        grey_scale=config.gray_scale
+        grey_scale=grey_scale
     )
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
@@ -191,7 +194,7 @@ if __name__ == "__main__":
     parser.add_argument("--name", type=str, default="HNet_experiment")
     parser.add_argument("--dataset", type=str, default="mnist_rot",
                         choices=["mnist_rot", "resisc45", "colorectal_hist"])
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
@@ -201,13 +204,12 @@ if __name__ == "__main__":
     parser.add_argument("--kernel_size", type=int, default=3)
     parser.add_argument("--pool_stride", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=1.0)
-    parser.add_argument("--invariant_channels", type=int, default=64)
-    parser.add_argument("--bn", default="IIDbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
+    parser.add_argument("--invariant_channels", type=int, default=128)
+    parser.add_argument("--bn", default="Normbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
     parser.add_argument("--max_rot_order", type=float, default=3)
     parser.add_argument("--img_size", type=int, default=28)
     parser.add_argument("--n_classes", type=int, default=10)
     parser.add_argument("--patience", type=int, default=3)
-    parser.add_argument("--gray_scale", type=bool, default=False)
     args = parser.parse_args()
 
     config = vars(args)

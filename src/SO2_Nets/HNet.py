@@ -74,12 +74,12 @@ class HNet(torch.nn.Module):
 
             self.blocks.append(block)
 
-            pool = nn.PointwiseAvgPoolAntialiased(cur_type, sigma=pool_sigma, stride=pool_stride)
+            pool = nn.PointwiseAvgPoolAntialiased2D(cur_type, sigma=pool_sigma, stride=pool_stride)
             self.pools.append(pool)
 
         c = invariant_channels
         self.out_inv_type = nn.FieldType(self.r2_act, c * [self.r2_act.trivial_repr])
-        self.invariant_map = nn.R2Conv(cur_type, self.out_inv_type, kernel_size=1, bias=False)
+        self.invariant_map = nn.R2Conv(cur_type, self.out_inv_type, kernel_size=3, padding=1, bias=False)
 
         self.avg = torch.nn.AdaptiveAvgPool2d((1, 1))
         print(c)
@@ -173,11 +173,12 @@ class HNet(torch.nn.Module):
             feature_type = nn.FieldType(self.r2_act, feature_repr)
 
             activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16)
+            feature_type = activation.out_type
 
             layers.append(nn.R2Conv(cur_type, feature_type, kernel_size=self.kernel_size, padding=self.pad))
 
             layers.append(activation)
-            feature_type = activation.out_type
+
 
             layers.append(self.batch_norm(feature_type))
 
