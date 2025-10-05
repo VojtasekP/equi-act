@@ -291,7 +291,7 @@ wheels = [
 ]
 
 [[package]]
-name = "equi-act"
+name = "equiact"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

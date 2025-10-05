@@ -155,7 +155,8 @@ def _train_impl(config):
         devices=1,
         precision="32-true",
         deterministic=False,
-        benchmark=True
+        benchmark=True,
+        log_every_n_steps=10,
     )
 
     trainer.fit(model, datamodule=datamodule)
