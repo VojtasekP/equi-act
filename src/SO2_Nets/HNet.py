@@ -38,9 +38,11 @@ class HNet(torch.nn.Module):
         assert bn in ["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"]
 
         self.r2_act = gspaces.rot2dOnR2(-1, maximum_frequency=max_rot_order)
+        self.max_rot_order = max_rot_order
 
-        self._create_irreps(max_rot_order, bn)
+        self._create_irreps(bn)
         self._create_input_type(grey_scale)
+
 
         self.batch_norm = self._create_bn(bn) # create batch norm object
         self.kernel_size = kernel_size
@@ -94,12 +96,12 @@ class HNet(torch.nn.Module):
             torch.nn.ELU(inplace=True),
             torch.nn.Linear(c//4, n_classes),
         )
-    def _create_irreps(self, max_rot_order, bn_type):
+    def _create_irreps(self, bn_type):
         if bn_type == "Normbn": # for normbn we cannot have trivial representations
-            assert max_rot_order > 0, "NormBatchNorm is not defined for trivial representations. Please set max_rot_order > 0."
-            self.irreps = [self.r2_act.irrep(m) for m in range(1, max_rot_order + 1)]
+            assert self.max_rot_order > 0, "NormBatchNorm is not defined for trivial representations. Please set max_rot_order > 0."
+            self.irreps = [self.r2_act.irrep(m) for m in range(1, self.max_rot_order + 1)]
         else:
-            self.irreps = [self.r2_act.irrep(m) for m in range(max_rot_order + 1)]
+            self.irreps = [self.r2_act.irrep(m) for m in range(self.max_rot_order + 1)]
 
     def _create_input_type(self, grey_scale):
         if grey_scale:
@@ -164,13 +166,13 @@ class HNet(torch.nn.Module):
     def make_fourier_block(self, in_type: nn.FieldType, channels: int, layers_num: int):
         layers = []
         cur_type = in_type
+
         G = in_type.fibergroup
-        assert self.non_linearity in ['relu', 'elu', 'sigmoid', 'tanh']
-        non_linearity = 'p_' + non_linearity
         for _ in range(layers_num):
             feature_repr = self.irreps * channels
-            activation = nn.FourierPointwise(feature_type, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16)
             feature_type = nn.FieldType(self.r2_act, feature_repr)
+
+            activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16)
 
             layers.append(nn.R2Conv(cur_type, feature_type, kernel_size=self.kernel_size, padding=self.pad))
 
@@ -179,7 +181,6 @@ class HNet(torch.nn.Module):
 
             layers.append(self.batch_norm(feature_type))
 
-
             cur_type = feature_type
         return nn.SequentialModule(*layers), cur_type
     
@@ -187,11 +188,9 @@ class HNet(torch.nn.Module):
         layers = []
         cur_type = in_type
         G = in_type.fibergroup
-        assert self.non_linearity in ['relu', 'elu', 'sigmoid', 'tanh']
-        non_linearity = 'p_' + non_linearity
         for _ in range(layers_num):
             feature_repr = self.irreps * channels
-            activation = nn.FourierPointwise(feature_type, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=non_linearity, N=16, adaptive_sampling=True)
+            activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16, adaptive_sampling=True)
             feature_type = nn.FieldType(self.r2_act, feature_repr)
 
             layers.append(nn.R2Conv(cur_type, feature_type, kernel_size=self.kernel_size, padding=self.pad, bias=False))

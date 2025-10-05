@@ -150,7 +150,7 @@ def _train_impl(config):
         callbacks=[early, chkpt, lr_monitor],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        precision="16-mixed",
+        precision="32-true",
         deterministic=False,
         benchmark=True
     )

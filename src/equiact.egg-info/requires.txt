@@ -1,0 +1,13 @@
+datasets>=4.1.1
+escnn>=1.0.11
+ipykernel>=6.30.1
+lightning>=2.5.5
+matplotlib>=3.10.6
+numpy>=1.26.4
+pytest>=8.4.2
+scipy==1.10.*
+torch>=2.8.0
+torchaudio>=2.8.0
+torchmetrics>=1.8.2
+torchvision>=0.23.0
+wandb>=0.22.0
