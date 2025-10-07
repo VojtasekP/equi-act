@@ -23,6 +23,8 @@ print("Available GPUs:", torch.cuda.device_count(), [torch.cuda.get_device_name(
 device = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu")
 print("Using device:", device)
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 class LitHnn(L.LightningModule):
     def __init__(self,
@@ -72,24 +74,24 @@ class LitHnn(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.train_acc)
-        self.log('train_loss', loss, prog_bar=True, on_step=True, on_epoch=True)
-        self.log('train_acc',  acc,  prog_bar=True, on_step=True, on_epoch=True)
+        self.log('train_loss', loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_acc',  acc,  prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.val_acc)
-        self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True)
+        self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.test_acc)
-        self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True)
+        self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
         opt = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=5, )
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=10, T_mult=2, eta_min=1e-6)
 
         return {
             "optimizer": opt,
@@ -105,21 +107,23 @@ def _train_impl(config):
     dataset = getattr(config, "dataset", "None")
 
     if dataset == "mnist_rot":
-        datamodule = MnistRotDataModule(batch_size=config.batch_size, data_dir="./src/datasets_utils/mnist_rotation_new")
-        n_classes_dm = getattr(datamodule, "num_classes", getattr(config, "n_classes", None))
+        datamodule = MnistRotDataModule(batch_size=config.batch_size, 
+                                        data_dir="./src/datasets_utils/mnist_rotation_new")
         grey_scale = True
+
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
-                                        img_size=getattr(config, "img_size", 128))
+                                        img_size=getattr(config, "img_size", 256))
         grey_scale = False
-        n_classes_dm = datamodule.num_classes
+
     elif dataset == "colorectal_hist":
         datamodule = ColorectalHistDataModule(batch_size=config.batch_size,
-                                              img_size=getattr(config, "img_size", 128))
-        n_classes_dm = datamodule.num_classes
+                                              img_size=getattr(config, "img_size", 150))
         grey_scale = False
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
+
+    n_classes_dm = datamodule.num_classes
 
     # Log choices
     wandb.config.update({
@@ -127,7 +131,7 @@ def _train_impl(config):
     }, allow_val_change=True)
 
     model = LitHnn(
-        n_classes=int(n_classes_dm),
+        n_classes=n_classes_dm,
         max_rot_order=config.max_rot_order,
         channels_per_block=config.channels_per_block,
         layers_per_block=config.layers_per_block,
@@ -144,7 +148,7 @@ def _train_impl(config):
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
                             save_top_k=1, mode='min')
-    early = EarlyStopping(monitor='val_loss', mode='min', patience=10, verbose=True, min_delta=0.001)
+    early = EarlyStopping(monitor='val_loss', mode='min', patience=15, verbose=True, min_delta=0.001)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
     trainer = Trainer(
@@ -152,17 +156,17 @@ def _train_impl(config):
         logger=logger,
         callbacks=[early, chkpt, lr_monitor],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=1,
+        devices=2,
+        strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
         precision="32-true",
         deterministic=False,
         benchmark=True,
-        log_every_n_steps=10,
+        log_every_n_steps=50,
     )
 
     trainer.fit(model, datamodule=datamodule)
     best_ckpt_path = chkpt.best_model_path or None
     best_val_loss = float(chkpt.best_model_score.item()) if chkpt.best_model_score is not None else None
-
     if best_ckpt_path:
         test_metrics = trainer.test(model=None, datamodule=datamodule, ckpt_path=best_ckpt_path)
     else:
@@ -195,21 +199,20 @@ if __name__ == "__main__":
     parser.add_argument("--name", type=str, default="HNet_experiment")
     parser.add_argument("--dataset", type=str, default="mnist_rot",
                         choices=["mnist_rot", "resisc45", "colorectal_hist"])
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
-    parser.add_argument("--channels_per_block", default=[16, 32, 64])
-    parser.add_argument("--layers_per_block", default=2)
-    parser.add_argument("--activation_type", default="gated_relu", choices=["gated_relu","norm_relu", "norm_squash", "pointwise_relu","fourier_relu", "fourier_elu"])
+    parser.add_argument("--channels_per_block", default=[32, 64, 128, 256])
+    parser.add_argument("--layers_per_block", default=1)
+    parser.add_argument("--activation_type", default="gated_relu", choices=["gated_relu","norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
     parser.add_argument("--kernel_size", type=int, default=3)
     parser.add_argument("--pool_stride", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=1.0)
     parser.add_argument("--invariant_channels", type=int, default=128)
-    parser.add_argument("--bn", default="Normbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
+    parser.add_argument("--bn", default="IIDbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
     parser.add_argument("--max_rot_order", type=float, default=3)
-    parser.add_argument("--img_size", type=int, default=28)
-    parser.add_argument("--n_classes", type=int, default=10)
+    parser.add_argument("--img_size", type=int, default=128)
     parser.add_argument("--patience", type=int, default=3)
     args = parser.parse_args()
 

@@ -51,6 +51,7 @@ def set_seed(seed: int):
 
 def run_one(cfg_dict):
     cfg = SimpleNamespace(**cfg_dict)
+    
     return train(cfg)
 
 def main():
@@ -62,7 +63,7 @@ def main():
     p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight_decay", type=float, default=1e-4)
-    p.add_argument("--channels_per_block", default=[16, 32, 64])
+    p.add_argument("--channels_per_block", default=[16, 32, 64, 128])
     p.add_argument("--layers_per_block", type=int, default=2)
     p.add_argument("--kernel_size", type=int, default=5)
     p.add_argument("--pool_stride", type=int, default=2)

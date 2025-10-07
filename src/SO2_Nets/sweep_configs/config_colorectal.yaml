@@ -16,7 +16,10 @@ pool_stride: 2
 pool_sigma: 0.9
 invariant_channels: 128
 use_bn: true
-non_linearity: none
+activation_type:
+  - fourier_elu
+  - gated_relu
+  - norm_
 max_rot_order: 1
 
 img_size: 125

@@ -1,9 +1,9 @@
-from torch.utils.data import DataLoader, ConcatDataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, ConcatDataset, WeightedRandomSampler, Dataset
 from torchvision import transforms
 from datasets import load_dataset
 
 
-class HFImageTorchDataset(torch.utils.data.Dataset):
+class HFImageTorchDataset(Dataset):
     def __init__(self, hf_split, transform=None, image_key="image", label_key="label"):
         self.ds = hf_split
         self.transform = transform

@@ -48,7 +48,7 @@ class MnistRotDataModule(L.LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.data_dir = data_dir
-
+        self.num_classes = 10
         self.train_transform = Compose([
             Pad((0, 0, 1, 1), fill=0),  # Pad the image
             Resize(87),  # Upscale
@@ -78,7 +78,7 @@ class MnistRotDataModule(L.LightningDataModule):
         return DataLoader(
             self.mnist_train,
             batch_size=self.batch_size,
-            num_workers=os.cpu_count() // 2,  # Use multiple workers
+            num_workers=8,  # Use multiple workers
             pin_memory=True,  # Faster data transfer to GPU
             persistent_workers=True,
             shuffle=True
@@ -88,7 +88,7 @@ class MnistRotDataModule(L.LightningDataModule):
         return DataLoader(
             self.mnist_val,
             batch_size=self.batch_size,
-            num_workers=os.cpu_count() // 2,  # Use multiple workers
+            num_workers=8,  # Use multiple workers
             pin_memory=True,  # Faster data transfer to GPU
             persistent_workers=True  # Keep workers alive between epochs
         )
@@ -97,7 +97,7 @@ class MnistRotDataModule(L.LightningDataModule):
         return DataLoader(
             self.mnist_test,
             batch_size=self.batch_size,
-            num_workers=os.cpu_count() // 2,  # Use multiple workers
+            num_workers=8,  # Use multiple workers
             pin_memory=True,  # Faster data transfer to GPU
             persistent_workers=True  # Keep workers alive between epochs
         )
@@ -106,16 +106,16 @@ class MnistRotDataModule(L.LightningDataModule):
         return DataLoader(
             self.mnist_predict,
             batch_size=self.batch_size,
-            num_workers=os.cpu_count() // 2,  # Use multiple workers
+            num_workers=8,  # Use multiple workers
             pin_memory=True,  # Faster data transfer to GPU
             persistent_workers=True  # Keep workers alive between epochs
         )
 
 
-class HFImageTorchDataset(torch.utils.data.Dataset):
-    def __init__(self, hf_split, transform, image_key: str = "image", label_key: str = "label"):
+class HFImageTorchDataset(Dataset):
+    def __init__(self, hf_split, transform=None, image_key="image", label_key="label"):
         self.ds = hf_split
-        self.tf = transform
+        self.transform = transform
         self.image_key = image_key
         self.label_key = label_key
 
@@ -124,9 +124,11 @@ class HFImageTorchDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         ex = self.ds[idx]
-        img = ex[self.image_key]  # PIL.Image (decoded by 🤗 Datasets)
+        img = ex[self.image_key]  # PIL image if decoded by datasets_utils
+        if self.transform:
+            img = self.transform(img)
         y = int(ex[self.label_key])
-        return self.tf(img), y
+        return img, y
 
 
 # ---------- common transforms (RGB) ----------
@@ -170,15 +172,15 @@ class Resisc45DataModule(L.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True,
-                          num_workers=os.cpu_count() // 2, pin_memory=True, drop_last=True)
+                          num_workers=8, pin_memory=True, drop_last=True, persistent_workers=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_ds, batch_size=self.batch_size, shuffle=False,
-                          num_workers=os.cpu_count() // 2, pin_memory=True)
+                          num_workers=8, pin_memory=True, persistent_workers=True)
 
     def test_dataloader(self):
         return DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False,
-                          num_workers=os.cpu_count() // 2, pin_memory=True)
+                          num_workers=8, pin_memory=True, persistent_workers=True)
 
 
 # ---------- Colorectal Histology: stratified 85/7.5/7.5 from TRAIN(5000) ----------
@@ -203,8 +205,8 @@ class ColorectalHistDataModule(L.LightningDataModule):
         full = ds["train"]
 
         # Cast label column to ClassLabel
-        num_classes = 8
-        full = full.cast_column("label", ClassLabel(num_classes=num_classes))
+        self.num_classes = 8
+        full = full.cast_column("label", ClassLabel(num_classes=self.num_classes))
 
         # 85% train / 15% temp
         split1 = full.train_test_split(test_size=0.15, seed=self.seed, stratify_by_column="label")
@@ -222,12 +224,12 @@ class ColorectalHistDataModule(L.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True,
-                          num_workers=os.cpu_count() // 2, pin_memory=True, drop_last=True)
+                          num_workers=8, pin_memory=True, drop_last=True, persistent_workers=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_ds, batch_size=self.batch_size, shuffle=False,
-                          num_workers=os.cpu_count() // 2, pin_memory=True)
+                          num_workers=8, pin_memory=True, persistent_workers=True)
 
     def test_dataloader(self):
         return DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False,
-                          num_workers=os.cpu_count() // 2, pin_memory=True)
+                          num_workers=8, pin_memory=True, persistent_workers=True)

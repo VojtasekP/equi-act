@@ -191,7 +191,7 @@ class HNet(torch.nn.Module):
         G = in_type.fibergroup
         for _ in range(layers_num):
             feature_repr = self.irreps * channels
-            activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16, adaptive_sampling=True)
+            activation = AdaptiveFourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16, adaptive_sampling=True)
             feature_type = nn.FieldType(self.r2_act, feature_repr)
 
             layers.append(nn.R2Conv(cur_type, feature_type, kernel_size=self.kernel_size, padding=self.pad, bias=False))
