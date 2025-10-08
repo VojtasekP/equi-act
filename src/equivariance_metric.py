@@ -1,7 +1,6 @@
-import numpy as np
-from escnn import nn as escnn_nn   # to avoid shadowing torch.nn as nn
 import torch
-
+import numpy as np
+from escnn import nn as escnn_nn
 
 @torch.inference_mode()
 def rel_err(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -9,54 +8,61 @@ def rel_err(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     diff  = torch.linalg.vector_norm(x - y, dim=1)
     denom = torch.maximum(torch.linalg.vector_norm(x, dim=1),
                           torch.linalg.vector_norm(y, dim=1))
-    denom = torch.where(denom > 0, denom, torch.ones_like(denom))
+    denom = torch.clamp(denom, min=1e-12)
     return diff / denom
 
-
 @torch.inference_mode()
-def check_equivariance_batch(x, model, r2_act, num_samples=32):
+def check_equivariance_batch(x: torch.Tensor, model, num_samples: int = 16, chunk: int = 0):
     """
-    Vectorized equivariance test on the *equivariant* feature map returned by forward_features.
-    x: (B,C,H,W) torch.Tensor
-    r2_act: gspaces.rot2dOnR2(-1, maximum_frequency=...)
-    Returns (thetas, mean_errors_per_theta)
+    Vectorized equivariance test on the *equivariant* feature map returned by model.forward_features.
+    Returns: thetas (np.ndarray), errors_per_theta (np.ndarray)
     """
-    # sample distinct group elements (avoid duplicate 0 ≡ 2π)
+    model.eval()
+    device = next(model.parameters()).device
+    x = x.to(device, non_blocking=True)
+
+    r2_act = getattr(model, "r2_act")
     thetas = np.linspace(0.0, 2*np.pi, num_samples, endpoint=False)
     elems  = [r2_act.fibergroup.element(float(t)) for t in thetas]
 
-    # forward once to get reference feature GeometricTensor
-    y_ref = model.forward_features(x)            # GeometricTensor
-    # build transformed inputs
+    # Reference features
+    y_ref = model.forward_features(x)  # GeometricTensor
+
+    # Build transformed inputs (GeoTensor -> transform)
     x_geo = escnn_nn.GeometricTensor(x, model.input_type)
-    xs = [x_geo.transform(g) for g in elems]
-    xb = escnn_nn.GeometricTensor(torch.cat([t.tensor for t in xs], dim=0), model.input_type)
+    x_list = [x_geo.transform(g).tensor for g in elems]
+    xb = escnn_nn.GeometricTensor(torch.cat(x_list, dim=0), model.input_type)
 
-    # single batched pass on rotated inputs
-    y_rot = model.forward_features(xb)           # GeometricTensor
+    # Forward on rotated inputs (optionally chunked)
+    if chunk and chunk > 0:
+        outs = []
+        for i in range(0, xb.tensor.size(0), chunk):
+            slice_geo = escnn_nn.GeometricTensor(xb.tensor[i:i+chunk], xb.type)
+            outs.append(model.forward_features(slice_geo).tensor)
+        y_rot_tensor = torch.cat(outs, dim=0)
+    else:
+        y_rot_tensor = model.forward_features(xb).tensor
 
-    # transform reference output and stack
-    ys = [y_ref.transform(g) for g in elems]
-    y_ref_b = escnn_nn.GeometricTensor(torch.cat([t.tensor for t in ys], dim=0), y_ref.type)
+    # Transform reference features
+    y_ref_list = [y_ref.transform(g).tensor for g in elems]
+    y_ref_b = torch.cat(y_ref_list, dim=0)
 
-    # relative error per sample
-    errs = rel_err(y_rot.tensor, y_ref_b.tensor)  # shape (num_samples*B,)
+    # Relative error per angle (averaged over batch)
     B = x.shape[0]
-    return thetas, errs.view(num_samples, B).mean(dim=1).cpu().numpy()
-import torch
-import numpy as np
-from torchvision.transforms.functional import rotate, InterpolationMode
-
-
+    errs = rel_err(y_rot_tensor, y_ref_b).view(num_samples, B).mean(dim=1)
+    return thetas, errs.detach().cpu().numpy()
 
 @torch.inference_mode()
 def logits_invariance_error(model, x, angles=(0, 90, 180, 270)):
     """
-    Relative invariance error on logits. x: (B,C,H,W) torch.Tensor on correct device.
-    Returns dict: {angle_deg: scalar_error}.
+    Relative invariance error on logits after the invariant head.
     """
+    from torchvision.transforms.functional import rotate, InterpolationMode
     model.eval()
-    base = model(x)  # logits (B, num_classes)
+    device = next(model.parameters()).device
+    x = x.to(device, non_blocking=True)
+
+    base = model(x)  # (B, C)
     errs = {}
     for a in angles:
         xr = rotate(x, a, interpolation=InterpolationMode.BILINEAR)
