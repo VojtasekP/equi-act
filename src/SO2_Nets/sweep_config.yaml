@@ -1,0 +1,46 @@
+program: src/SO2_Nets/train.py
+method: grid
+
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+  project:
+    value: "equi_act_study"
+  dataset:
+    values: ["mnist_rot", "resisc45", "colorectal_hist"]
+  activation_type:
+    values: ["gated_relu", "norm_relu", "norm_squash", "fourier_relu"]
+  bn:
+    values: ["IIDbn", "Normbn", "FieldNorm"]
+  seed:
+    values: [0, 1, 2]
+
+  channels_per_block:
+    value: [32, 64, 128]
+  layers_per_block:
+    value: 1
+  kernel_size:
+    value: 5
+  pool_stride:
+    value: 2
+  pool_sigma:
+    value: 0.66
+  invariant_channels:
+    value: 64
+  max_rot_order:
+    value: 2
+  lr:
+    value: 1e-4
+  weight_decay:
+    value: 1e-4
+  batch_size:
+    value: 32
+  epochs:
+    value: 150
+  patience:
+    value: 10
+  img_size:
+    value: 128
+
