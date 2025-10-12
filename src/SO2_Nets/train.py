@@ -69,70 +69,7 @@ class LitHnn(L.LightningModule):
         self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
         self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
 
-        self.eq_every = 5           # compute every 5 epochs to keep cost down
         self.eq_num_angles = 16
-        self.eq_subset = 64         # K samples
-        self._val_eq_cached = None
-        self._logged_curve_once = False
-
-    @torch.no_grad()
-    def _cache_val_subset(self):
-        if self._val_eq_cached is not None:
-            return
-        # take a fixed small deterministic subset from first val batch
-        val_loader = self.trainer.val_dataloaders[0]
-        x0, _ = next(iter(val_loader))
-        self._val_eq_cached = x0[:self.eq_subset].to(self.device, non_blocking=True)
-
-    def on_validation_epoch_start(self):
-        self._cache_val_subset()
-
-    @torch.no_grad()
-    def _compute_and_log_val_eq(self):
-        x = self._val_eq_cached
-        if x is None:
-            return
-        thetas, curve = em.check_equivariance_batch(self.model, x, num_angles=self.eq_num_angles)
-        eq_mean = float(curve.mean())
-        # scalar for nice dashboards
-        self.log('val_eq_error', eq_mean, prog_bar=False, on_epoch=True)
-        # log the full curve to W&B once per run (so you can plot it)
-        if isinstance(self.logger, WandbLogger) and not self._logged_curve_once:
-            wandb_run = self.logger.experiment
-            wandb_run.log({
-                "val_eq_error_curve": {str(i): float(v) for i, v in enumerate(curve)},
-                "trainer/global_step": self.global_step
-            })
-            self._logged_curve_once = True
-
-    def on_validation_epoch_end(self):
-        # compute every N epochs
-        if (self.current_epoch + 1) % self.eq_every == 0:
-            self.model.eval()
-            self._compute_and_log_val_eq()
-
-    # --- TEST-TIME EQUIVARIANCE ---
-    def on_test_epoch_start(self):
-        # small fixed test subset
-        test_loader = self.trainer.test_dataloaders[0]
-        x0, _ = next(iter(test_loader))
-        self._test_eq_cached = x0[:max(128, self.eq_subset)].to(self.device, non_blocking=True)
-
-    @torch.no_grad()
-    def on_test_epoch_end(self):
-        x = getattr(self, "_test_eq_cached", None)
-        if x is None:
-            return
-        thetas, curve = em.check_equivariance_batch(self.model, x, num_angles=self.eq_num_angles)
-        eq_mean = float(curve.mean())
-        # standard scalar logs
-        self.log('test_eq_error', eq_mean, prog_bar=False, on_epoch=True)
-        # full curve to W&B for the paper figure
-        if isinstance(self.logger, WandbLogger):
-            wandb_run = self.logger.experiment
-            wandb_run.log({
-                "test_eq_error_curve": {str(i): float(v) for i, v in enumerate(curve)}
-            })
 
     def shared_step(self, batch, acc_metric):
         x, y = batch
@@ -152,10 +89,24 @@ class LitHnn(L.LightningModule):
         self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
+        if batch_idx == 0:
+            self.model.eval()
+            # Fix here - unpack batch and pass x as the first argument
+            x, y = batch
+            thetas, curve = em.check_equivariance_batch(x, self.model, num_samples=self.eq_num_angles)
+            eq_mean = float(curve.mean())
+            self.log('val_eq_error', eq_mean, prog_bar=False, on_epoch=True)
+
     def test_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.test_acc)
         self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        if batch_idx == 0:
+            # Fix here too
+            x, y = batch
+            thetas, curve = em.check_equivariance_batch(x, self.model, num_samples=self.eq_num_angles)
+            eq_mean = float(curve.mean())
+            self.log('test_eq_error', eq_mean, prog_bar=False, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
@@ -178,7 +129,7 @@ def _train_impl(config):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    logger = WandbLogger(project=config.project, name=config.name)
+    logger = WandbLogger(name=config.project, project=config.project)
 
     dataset = getattr(config, "dataset", "None")
 
@@ -224,7 +175,7 @@ def _train_impl(config):
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
                             save_top_k=1, mode='min')
-    early = EarlyStopping(monitor='val_loss', mode='min', patience=15, verbose=True, min_delta=0.001)
+    early = EarlyStopping(monitor='val_loss', mode='min', patience=config.patience, verbose=True)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
     trainer = Trainer(
@@ -232,7 +183,7 @@ def _train_impl(config):
         logger=logger,
         callbacks=[early, chkpt, lr_monitor],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=2,
+        devices=1,
         strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
         precision="32-true",
         deterministic=True,     # was False
@@ -285,10 +236,10 @@ if __name__ == "__main__":
     parser.add_argument("--kernel_size", type=int, default=3)
     parser.add_argument("--pool_stride", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=1.0)
-    parser.add_argument("--invariant_channels", type=int, default=128)
+    parser.add_argument("--invariant_channels", type=int, default=512)
     parser.add_argument("--bn", default="IIDbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
     parser.add_argument("--max_rot_order", type=float, default=3)
-    parser.add_argument("--img_size", type=int, default=128)
+    parser.add_argument("--img_size", type=int, default=256)
     parser.add_argument("--patience", type=int, default=3)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()

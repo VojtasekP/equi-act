@@ -1,0 +1,56 @@
+program: src/SO2_Nets/train.py
+method: bayes
+project: equi_act_study
+metric:
+  name: val_loss
+  goal: minimize
+
+early_terminate:
+  type: hyperband
+  min_iter: 20
+
+parameters:
+  dataset:
+    value: mnist_rot
+  img_size:
+    values: [28, 64, 128, 256]
+  seed:
+    value: 0            # fix seed during search; validate later
+  bn:
+    value: IIDbn
+
+  activation_type:
+    values: ["gated_relu", "norm_relu", "norm_squash", "fourier_relu"]
+
+  channels_per_block:
+    values:
+      - [32, 64, 128]
+      - [64, 128, 256]
+      - [32, 64, 128, 256]
+      - [64, 128, 256, 512]
+
+  kernel_size:
+    values: [3, 5]
+
+  invariant_channels:
+    values: [256, 512, 1024]
+
+  max_rot_order:
+    values: [1,2, 3]
+
+  lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.005
+
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.000001
+    max: 0.001
+
+  batch_size:
+    value: 32
+  epochs:
+    value: 310
+  patience:
+    value: 25

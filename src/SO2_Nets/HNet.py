@@ -220,8 +220,14 @@ class HNet(torch.nn.Module):
         return x
 
     def forward_features(self, input: torch.Tensor):
-        x = nn.GeometricTensor(input, self.input_type)
+        if isinstance(input, nn.GeometricTensor):
+            x = input
+        else:
+            x = nn.GeometricTensor(input, self.input_type)
+            
         for block, pool in zip(self.blocks, self.pools):
             x = block(x)
             x = pool(x)
-        return x  # GeometricTensor BEFORE invariant_map
+        x = self.invariant_map(x)
+        x = self.avg(x.tensor).squeeze(-1).squeeze(-1)
+        return x
