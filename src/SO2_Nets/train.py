@@ -93,9 +93,9 @@ class LitHnn(L.LightningModule):
             self.model.eval()
             # Fix here - unpack batch and pass x as the first argument
             x, y = batch
-            thetas, curve = em.check_equivariance_batch(x, self.model, num_samples=self.eq_num_angles)
+            thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
             eq_mean = float(curve.mean())
-            self.log('val_eq_error', eq_mean, prog_bar=False, on_epoch=True)
+            self.log('val_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.test_acc)
@@ -104,14 +104,14 @@ class LitHnn(L.LightningModule):
         if batch_idx == 0:
             # Fix here too
             x, y = batch
-            thetas, curve = em.check_equivariance_batch(x, self.model, num_samples=self.eq_num_angles)
+            thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
             eq_mean = float(curve.mean())
-            self.log('test_eq_error', eq_mean, prog_bar=False, on_epoch=True)
+            self.log('test_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
         opt = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=10, T_mult=2, eta_min=1e-6)
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=30, T_mult=2, eta_min=1e-6)
 
         return {
             "optimizer": opt,

@@ -44,31 +44,34 @@ class MnistRotDataset(Dataset):
 
 
 class MnistRotDataModule(L.LightningDataModule):
-    def __init__(self, batch_size=64, data_dir=None):
+    def __init__(self, batch_size=64, data_dir=None, img_size=29, seed: int = 42):
         super().__init__()
         self.batch_size = batch_size
         self.data_dir = data_dir
         self.num_classes = 10
+        # max_image_size = 64
+        # if img_size > max_image_size:
+        #     img_size = max_image_size
         self.train_transform = Compose([
             Pad((0, 0, 1, 1), fill=0),  # Pad the image
-            Resize(87),  # Upscale
-            Resize(29),  # Downscale back
+            Resize(img_size),  # Downscale back
             ToTensor(),  # Convert to tensor
         ])
 
         # Validation & Test Transforms (no rotation for consistency)
         self.test_transform = Compose([
             Pad((0, 0, 1, 1), fill=0),
-            Resize(87),
-            Resize(29),
+            Resize(img_size),
             ToTensor(),
         ])
+
+        self.generator = torch.Generator().manual_seed(seed)
 
     def setup(self, stage: str):
         if stage == 'fit':
             self.mnist_full = MnistRotDataset(mode='train', transform=self.train_transform, data_dir=self.data_dir)
 
-            self.mnist_train, self.mnist_val = torch.utils.data.random_split(self.mnist_full, [0.8, 0.2])
+            self.mnist_train, self.mnist_val = torch.utils.data.random_split(self.mnist_full, [0.8, 0.2], generator=self.generator)
         if stage == 'test':
             self.mnist_test = MnistRotDataset(mode='test', transform=self.test_transform, data_dir=self.data_dir)
         if stage == 'predict':
@@ -148,15 +151,17 @@ def make_transforms(img_size: int) -> Tuple[Compose, Compose]:
     return train_tf, eval_tf
 
 class Resisc45DataModule(L.LightningDataModule):
-    def __init__(self, batch_size: int = 256, img_size: int = 150):
+    def __init__(self, batch_size: int = 256, img_size: int = 150, seed: int = 42):
         super().__init__()
         self.batch_size = batch_size
         self.num_classes = 45
-        max_image_size = 256
-        if img_size > max_image_size:
-            img_size = max_image_size
+        # max_image_size = 256
+        # if img_size > max_image_size:
+        #     img_size = max_image_size
         self.img_size = img_size
         self.train_tf, self.eval_tf = make_transforms(img_size)
+
+        self.seed = seed
 
     def setup(self, stage=None):
 
@@ -193,9 +198,9 @@ class ColorectalHistDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.seed = seed
         self.num_classes = 8
-        max_image_size = 150
-        if img_size > max_image_size:
-            img_size = max_image_size
+        # max_image_size = 150
+        # if img_size > max_image_size:
+        #     img_size = max_image_size
         self.img_size = img_size
         self.train_tf, self.eval_tf = make_transforms(img_size)
 

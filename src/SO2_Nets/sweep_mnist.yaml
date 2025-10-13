@@ -13,7 +13,7 @@ parameters:
   dataset:
     value: mnist_rot
   img_size:
-    values: [28, 64, 128, 256]
+    value: 64
   seed:
     value: 0            # fix seed during search; validate later
   bn:
@@ -36,7 +36,7 @@ parameters:
     values: [256, 512, 1024]
 
   max_rot_order:
-    values: [1,2, 3]
+    values: [1,2,3]
 
   lr:
     distribution: log_uniform_values
