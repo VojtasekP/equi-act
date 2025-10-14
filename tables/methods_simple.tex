@@ -1,0 +1,23 @@
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{llrr}
+\toprule
+Activation & BN & Test error [\%] & Invar error \\
+\midrule
+fourier_relu & FieldNorm & 3.47 ± 0.13 & 0.218 ± 0.015 \\
+fourier\textbackslash{}_relu & IIDbn & 1.36 ± 0.04 & 0.433 ± 0.009 \\
+gated\textbackslash{}_relu & FieldNorm & 4.69 ± 0.08 & 0.160 ± 0.005 \\
+gated\textbackslash{}_relu & IIDbn & 2.00 ± 0.04 & 0.471 ± 0.008 \\
+gated\textbackslash{}_relu & Normbn & 2.62 ± 0.13 & 0.426 ± 0.022 \\
+norm\textbackslash{}_relu & FieldNorm & 89.81 ± 0.63 & 0.000 ± 0.000 \\
+norm\textbackslash{}_relu & IIDbn & 4.58 ± 0.15 & 0.615 ± 0.009 \\
+norm\textbackslash{}_relu & Normbn & 5.95 ± 0.23 & 0.857 ± 0.011 \\
+norm\textbackslash{}_squash & FieldNorm & 4.19 ± 0.12 & 0.290 ± 0.011 \\
+norm\textbackslash{}_squash & IIDbn & 2.76 ± 0.05 & 0.327 ± 0.006 \\
+norm\textbackslash{}_squash & Normbn & 2.86 ± 0.03 & 0.254 ± 0.008 \\
+\bottomrule
+\end{tabular}
+\caption{Method summary: test error in percent (mean ± std) and invariant error (mean ± std).}
+\label{tab:methods-simple}
+\end{table}
