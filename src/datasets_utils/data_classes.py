@@ -53,12 +53,12 @@ class MnistRotDataModule(L.LightningDataModule):
         # if img_size > max_image_size:
         #     img_size = max_image_size
         self.train_transform = Compose([
-            Pad((0, 0, 1, 1), fill=0),  # Pad the image
-            Resize(img_size),  # Downscale back
-            ToTensor(),  # Convert to tensor
+            RandomRotation(degrees=(0, 360), interpolation=InterpolationMode.BILINEAR, fill=0),
+            Pad((0, 0, 1, 1), fill=0),
+            Resize(img_size),
+            ToTensor(),
         ])
 
-        # Validation & Test Transforms (no rotation for consistency)
         self.test_transform = Compose([
             Pad((0, 0, 1, 1), fill=0),
             Resize(img_size),
@@ -76,7 +76,7 @@ class MnistRotDataModule(L.LightningDataModule):
             self.mnist_test = MnistRotDataset(mode='test', transform=self.test_transform, data_dir=self.data_dir)
         if stage == 'predict':
             self.mnist_predict = MnistRotDataset(mode='test', transform=self.test_transform, data_dir=self.data_dir)
-
+        
     def train_dataloader(self):
         return DataLoader(
             self.mnist_train,
@@ -138,13 +138,12 @@ class HFImageTorchDataset(Dataset):
 def make_transforms(img_size: int) -> Tuple[Compose, Compose]:
 
     train_tf = Compose([
-        RandomResizedCrop(img_size, scale=(0.8, 1.0)),
+        RandomRotation(degrees=(0, 360), interpolation=InterpolationMode.BILINEAR, fill=0),
         ToTensor()
     ])
 
     eval_tf = Compose([
         Resize(img_size),
-        CenterCrop(img_size),
         ToTensor(),
     ])
 

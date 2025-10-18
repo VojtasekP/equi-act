@@ -11,37 +11,41 @@ parameters:
   dataset:
     values: ["mnist_rot"]
   activation_type:
-    values: ["gated_relu", "norm_relu", "norm_squash", "fourier_relu"]
+    values: ["gated_relu"]
   bn:
-    values: ["IIDbn", "Normbn", "FieldNorm"]
+    values: ["IIDbn"]
   seed:
-    values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-
-  channels_per_block:
-    value: [64, 128, 256, 512]
-  layers_per_block:
+    values: [0, 1, 2, 3, 4]            # validate best config with multiple seeds
+  max_rot_order:
     value: 1
-  kernel_size:
-    value: 5
+  channels_per_block:
+    value: [16,  24, 32, 32, 48, 64]
+  kernels_per_block:
+    value: [7, 5, 5, 5, 5, 5]
+  paddings_per_block:
+    value: [1, 2, 2, 2, 2, 1]
+  pool_after_every_n_blocks:
+    value: 2
   pool_stride:
     value: 2
   pool_sigma:
     value: 0.66
   invariant_channels:
-    value: 1024
-  max_rot_order:
-    value: 2
-  lr:
-    value: 0.0001
-  weight_decay:
-    value: 0.00001
-  batch_size:
-    value: 32
-  epochs:
-    value: 210
-  patience:
-    value: 35
-  img_size:
     value: 64
+
+
+
+  lr:
+    value: 0.001
+  weight_decay:
+    value: 0
+  batch_size:
+    value: 64
+  epochs:
+    value: 30
+  patience:
+    value: 60
+  img_size:
+    value: 29
 
 

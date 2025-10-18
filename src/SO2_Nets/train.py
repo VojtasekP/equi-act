@@ -14,7 +14,7 @@ from lightning.pytorch.loggers import WandbLogger
 
 import wandb
 from SO2_Nets.HNet import HNet
-from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule
+from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, MnistRotDataset
 import argparse
 import equivariance_metric as em
 
@@ -34,9 +34,10 @@ class LitHnn(L.LightningModule):
     def __init__(self,
                  n_classes=10,
                  max_rot_order=2,
-                 channels_per_block=(8, 16, 128),          # number of channels per block
-                 layers_per_block=2,     
-                 kernel_size=5,
+                 channels_per_block=(8, 16, 32),          # number of channels per block
+                 kernels_per_block=(3, 3, 3),           # kernel size per block
+                 paddings_per_block=(1, 1, 1),          # padding per block
+                 pool_after_every_n_blocks=2,     
                  pool_stride=2,
                  pool_sigma=0.66,
                  invariant_channels=64,
@@ -44,7 +45,8 @@ class LitHnn(L.LightningModule):
                  activation_type="gated_relu",
                  lr=0.001,
                  weight_decay=0.01,
-                 grey_scale=False
+                 grey_scale=False,
+                 epochs=200
                  ):
         super().__init__()
 
@@ -52,11 +54,13 @@ class LitHnn(L.LightningModule):
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self.lr = lr
         self.weight_decay = weight_decay
+        self.epochs = epochs
         self.model = HNet(n_classes=n_classes,
                           max_rot_order=max_rot_order,
                           channels_per_block=channels_per_block,
-                          layers_per_block=layers_per_block,
-                          kernel_size=kernel_size,
+                          kernels_per_block=kernels_per_block,
+                          paddings_per_block=paddings_per_block,
+                          pool_after_every_n_blocks=pool_after_every_n_blocks,
                           pool_stride=pool_stride,
                           pool_sigma=pool_sigma,
                           invariant_channels=invariant_channels,
@@ -70,6 +74,23 @@ class LitHnn(L.LightningModule):
         self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
 
         self.eq_num_angles = 16
+
+    def on_fit_start(self):
+        # count all trainable parameters
+        n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        # optional: total including frozen ones
+        n_all = sum(p.numel() for p in self.model.parameters())
+
+        # log to W&B via Lightning's logger
+        self.logger.experiment.log({
+            "model/num_trainable_params": n_params,
+            "model/num_total_params": n_all
+        })
+
+        # REMOVE OR CHANGE THIS LINE:
+        # self.log("num_params", n_params, prog_bar=False, rank_zero_only=True)
+        
+
 
     def shared_step(self, batch, acc_metric):
         x, y = batch
@@ -89,9 +110,7 @@ class LitHnn(L.LightningModule):
         self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
-        if batch_idx == 0:
-            self.model.eval()
-            # Fix here - unpack batch and pass x as the first argument
+        with torch.no_grad():
             x, y = batch
             thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
             eq_mean = float(curve.mean())
@@ -101,7 +120,7 @@ class LitHnn(L.LightningModule):
         loss, acc = self.shared_step(batch, self.test_acc)
         self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-        if batch_idx == 0:
+        with torch.no_grad():
             # Fix here too
             x, y = batch
             thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
@@ -110,11 +129,18 @@ class LitHnn(L.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        opt = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0=30, T_mult=2, eta_min=1e-6)
+        optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        scheduler = optim.lr_scheduler.SequentialLR(
+                    optimizer,
+                    schedulers=[
+                        optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=10),
+                        optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
+                    ],
+                    milestones=[10]
+                )
 
         return {
-            "optimizer": opt,
+            "optimizer": optimizer,
             "lr_scheduler": {"scheduler": scheduler, "monitor": "val_loss"}
         }
 
@@ -137,7 +163,6 @@ def _train_impl(config):
         datamodule = MnistRotDataModule(batch_size=config.batch_size, 
                                         data_dir="./src/datasets_utils/mnist_rotation_new")
         grey_scale = True
-
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
                                         img_size=getattr(config, "img_size", 256))
@@ -161,16 +186,18 @@ def _train_impl(config):
         n_classes=n_classes_dm,
         max_rot_order=config.max_rot_order,
         channels_per_block=config.channels_per_block,
-        layers_per_block=config.layers_per_block,
+        kernels_per_block=config.kernels_per_block,
+        paddings_per_block=config.paddings_per_block,
+        pool_after_every_n_blocks=config.pool_after_every_n_blocks,
         activation_type=config.activation_type,
-        kernel_size=config.kernel_size,
         pool_stride=config.pool_stride,
         pool_sigma=config.pool_sigma,
         invariant_channels=config.invariant_channels,
         bn=config.bn,
         lr=config.lr,
         weight_decay=config.weight_decay,
-        grey_scale=grey_scale
+        grey_scale=grey_scale,
+        epochs=config.epochs
     )
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
@@ -226,21 +253,22 @@ if __name__ == "__main__":
     parser.add_argument("--name", type=str, default="HNet_experiment")
     parser.add_argument("--dataset", type=str, default="mnist_rot",
                         choices=["mnist_rot", "resisc45", "colorectal_hist"])
-    parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=1e-4)
-    parser.add_argument("--channels_per_block", default=[32, 64, 128, 256])
-    parser.add_argument("--layers_per_block", default=1)
+    parser.add_argument("--weight_decay", type=float, default=1e-5)
+    parser.add_argument("--channels_per_block", default=(24, 32, 36, 36, 64, 96))
+    parser.add_argument("--kernels_per_block", default=(9, 7, 7, 7, 7, 5))
+    parser.add_argument("--paddings_per_block", default=(1, 3, 3, 3, 3, 1))
+    parser.add_argument("--pool_after_every_n_blocks", default=2)
     parser.add_argument("--activation_type", default="gated_relu", choices=["gated_relu","norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
-    parser.add_argument("--kernel_size", type=int, default=3)
     parser.add_argument("--pool_stride", type=int, default=2)
-    parser.add_argument("--pool_sigma", type=float, default=1.0)
-    parser.add_argument("--invariant_channels", type=int, default=512)
+    parser.add_argument("--pool_sigma", type=float, default=0.66)
+    parser.add_argument("--invariant_channels", type=int, default=96)
     parser.add_argument("--bn", default="IIDbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
-    parser.add_argument("--max_rot_order", type=float, default=3)
-    parser.add_argument("--img_size", type=int, default=256)
-    parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--max_rot_order", type=float, default=1)
+    parser.add_argument("--img_size", type=int, default=29)
+    parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 

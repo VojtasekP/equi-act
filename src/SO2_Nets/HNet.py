@@ -25,18 +25,21 @@ class HNet(torch.nn.Module):
                  n_classes=10,
                  max_rot_order=2,
                  channels_per_block=(8, 16, 128),
-                 layers_per_block=2,
+                 kernels_per_block=(3, 3, 3),
+                 paddings_per_block=(1, 1, 1),
+                 pool_after_every_n_blocks=2,
                  activation_type="gated_relu",
-                 kernel_size=5,
                  pool_stride=2,
                  pool_sigma=0.66,
                  invariant_channels=64,
                  bn="IIDbn",
+                 img_size=29,
                  grey_scale=False):
         super().__init__()
         assert activation_type in ["gated_relu", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu"]
         assert bn in ["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"]
-
+        
+        assert len(channels_per_block) == len(kernels_per_block) == len(paddings_per_block), "channels_per_block, kernels_per_block and padding_per_block must have the same length"
         self.r2_act = gspaces.rot2dOnR2(-1, maximum_frequency=max_rot_order)
         self.max_rot_order = max_rot_order
 
@@ -44,64 +47,64 @@ class HNet(torch.nn.Module):
         self._create_input_type(grey_scale)
 
 
+        self.img_size = img_size
+        self.mask = nn.MaskModule(self.input_type, img_size, margin=1)
+
         self.batch_norm = self._create_bn(bn) # create batch norm object
-        self.kernel_size = kernel_size
-        self.pad = (kernel_size - 1) // 2
+        self.bn_type = bn
         self.non_linearity = self._create_fund_non_linearity(activation_type) # determines the non-linearity used in norm and fourier blocks, gated is fixed on relu
         cur_type = self.input_type
         self.blocks = torch.nn.ModuleList()
         self.pools = torch.nn.ModuleList()
 
-        for i, channels in enumerate(channels_per_block):
+        for i, (channels, kernel, padding) in enumerate(zip(channels_per_block, kernels_per_block, paddings_per_block)):
             if activation_type=="gated_relu":
                 block, cur_type = self.make_gated_block(
                                         in_type=cur_type,
                                         channels=channels,
-                                        layers_num=layers_per_block)
+                                        kernel_size=kernel,
+                                        pad=padding)
                 
             elif activation_type in ["norm_relu", "norm_squash", "norm_sigmoid", "norm_softplus"]:
 
                 block, cur_type = self.make_norm_block(
                                         in_type=cur_type,
                                         channels=channels,
-                                        layers_num=layers_per_block)
+                                        kernel_size=kernel,
+                                        pad=padding)
                 
             elif activation_type in ["fourier_relu", "fourier_elu"]:  # fourier
                 block, cur_type = self.make_fourier_block(
                                         in_type=cur_type,
                                         channels=channels,
-                                        layers_num=layers_per_block)
+                                        kernel_size=kernel,
+                                        pad=padding)
 
             self.blocks.append(block)
 
-            pool = nn.PointwiseAvgPoolAntialiased2D(cur_type, sigma=pool_sigma, stride=pool_stride)
-            self.pools.append(pool)
+
+            if ((i+1) % pool_after_every_n_blocks) == 0 and (i != len(channels_per_block)-1):
+                pool = nn.PointwiseAvgPoolAntialiased2D(cur_type, sigma=pool_sigma, stride=pool_stride)
+                # pool = nn.PointwiseMaxPoolAntialiased2D(cur_type, kernel_size=pool_stride)
+                self.blocks.append(pool)
 
         c = invariant_channels
         self.out_inv_type = nn.FieldType(self.r2_act, c * [self.r2_act.trivial_repr])
-        self.invariant_map = nn.R2Conv(cur_type, self.out_inv_type, kernel_size=3, padding=1, bias=False)
-
+        self.invariant_map = nn.R2Conv(cur_type, self.out_inv_type, kernel_size=1, padding=0, bias=False)
+        # self.invariant_map = nn.NormPool(in_type=cur_type)
         self.avg = torch.nn.AdaptiveAvgPool2d((1, 1))
-        print(c)
+        invariant_size = len(self.invariant_map.out_type)
         self.head = torch.nn.Sequential(
+            torch.nn.Linear(invariant_size, c),
             torch.nn.BatchNorm1d(c),
             torch.nn.ELU(inplace=True),
-            torch.nn.Linear(c, c//2),
 
-            torch.nn.BatchNorm1d(c//2),
-            torch.nn.ELU(inplace=True),
-            torch.nn.Linear(c//2, c//4),
-
-            torch.nn.BatchNorm1d(c//4),
-            torch.nn.ELU(inplace=True),
-            torch.nn.Linear(c//4, n_classes),
+            torch.nn.Linear(c, n_classes),
         )
     def _create_irreps(self, bn_type):
-        if bn_type == "Normbn": # for normbn we cannot have trivial representations
-            assert self.max_rot_order > 0, "NormBatchNorm is not defined for trivial representations. Please set max_rot_order > 0."
-            self.irreps = [self.r2_act.irrep(m) for m in range(1, self.max_rot_order + 1)]
-        else:
-            self.irreps = [self.r2_act.irrep(m) for m in range(self.max_rot_order + 1)]
+        
+        self.type_1_irrep = [self.r2_act.irrep(0)]        
+        self.type_2_irreps = [self.r2_act.irrep(m) for m in range(1, self.max_rot_order + 1)]
 
     def _create_input_type(self, grey_scale):
         if grey_scale:
@@ -122,67 +125,97 @@ class HNet(torch.nn.Module):
             raise ValueError(f"Unsupported activation type: {activation_type}")
         
 
-    def make_gated_block(self, in_type: nn.FieldType, channels: int, layers_num: int):
+    def make_gated_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
         layers = []
         cur_type = in_type
 
-        for _ in range(layers_num):
+        vector_rep = self.type_2_irreps * channels
+        scalar_rep = self.type_1_irrep * channels
 
-            feature_repr = self.irreps * channels
-            feature_type = nn.FieldType(self.r2_act, feature_repr)
+        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
+        vector_field = nn.FieldType(self.r2_act, vector_rep)
+        
+        feat_type_out = scalar_field + vector_field
 
-            gate_repr = [self.r2_act.trivial_repr] * len(feature_repr)
-            full_type = nn.FieldType(self.r2_act, gate_repr + feature_repr)
+        gate_repr = [self.r2_act.trivial_repr] * len(vector_rep)
+        gate_field = nn.FieldType(self.r2_act, gate_repr) + vector_field
+        full_field = scalar_field + gate_field
+        layers.append(nn.R2Conv(cur_type, full_field, kernel_size=kernel_size, padding=pad))
 
-            layers.append(nn.R2Conv(cur_type, full_type, kernel_size=self.kernel_size, padding=self.pad))
+        non_linearity = nn.MultipleModule(in_type=full_field, 
+                                        labels=['elu']*len(scalar_rep) + ['gate']*len(gate_field),
+                                        modules=[(nn.ELU(scalar_field), 'elu'), (nn.GatedNonLinearity1(gate_field, drop_gates=True), 'gate')]
+                                        )
+        layers.append(non_linearity)
+
+        if self.bn_type == "Normbn":
+            identity = nn.IdentityModule(scalar_field)
+            batch_norm = nn.MultipleModule(in_type=feat_type_out,
+                                        labels=['none']*len(scalar_rep) + ['norm']*len(vector_rep),
+                                        modules=[(identity, 'none'), (self.batch_norm(vector_field), 'norm')]
+                                        )
+            layers.append(batch_norm)
+        else:               
+            layers.append(self.batch_norm(feat_type_out))
 
 
-            layers.append(nn.GatedNonLinearity1(full_type, drop_gates=True))
-
-            layers.append(self.batch_norm(feature_type))
-
-
-            cur_type = feature_type
+        cur_type = feat_type_out
 
         return nn.SequentialModule(*layers), cur_type
 
-    def make_norm_block(self, in_type: nn.FieldType, channels: int, layers_num: int):
+    def make_norm_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
         layers = []
         cur_type = in_type
         bias = True if self.non_linearity in ['n_relu', 'n_softplus'] else False
-        for _ in range(layers_num):
-            feature_repr = self.irreps * channels
-            feature_type = nn.FieldType(self.r2_act, feature_repr)
+        vector_rep = self.type_2_irreps * channels
+        scalar_rep = self.type_1_irrep * channels
+        
+        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
+        vector_field = nn.FieldType(self.r2_act, vector_rep)
 
-            layers.append(nn.R2Conv(cur_type, feature_type, kernel_size=self.kernel_size, padding=self.pad))
-            layers.append(nn.NormNonLinearity(in_type=feature_type, function=self.non_linearity, bias=bias))
+        feat_type_out = scalar_field + vector_field
 
-            layers.append(self.batch_norm(feature_type))
+        layers.append(nn.R2Conv(cur_type, feat_type_out, kernel_size=kernel_size, padding=pad))
 
-            cur_type = feature_type
+        elu = nn.ELU(scalar_field)
+        norm_nonlin = nn.NormNonLinearity(in_type=vector_field, function=self.non_linearity, bias=bias)
+
+        non_linearity = nn.MultipleModule(in_type=feat_type_out, 
+                                            labels=['elu']*len(scalar_rep) + ['norm']*len(vector_rep), 
+                                            modules=[(elu,'elu'), (norm_nonlin, 'norm')]
+                                            )
+
+        layers.append(non_linearity)
+        if self.bn_type == "Normbn":
+            identity = nn.IdentityModule(scalar_field)
+            batch_norm = nn.MultipleModule(in_type=feat_type_out,
+                                        labels=['none']*len(scalar_rep) + ['norm']*len(vector_rep),
+                                        modules=[(identity, 'none'), (self.batch_norm(vector_field), 'norm')]
+                                        )
+            layers.append(batch_norm)
+        else:               
+            layers.append(self.batch_norm(feat_type_out))
+
+        cur_type = feat_type_out
 
         return nn.SequentialModule(*layers), cur_type
     
-    def make_fourier_block(self, in_type: nn.FieldType, channels: int, layers_num: int):
+    def make_fourier_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
         layers = []
         cur_type = in_type
-
+        scalar_field = nn.FieldType(self.r2_act, self.type_1_irrep * channels)
         G = in_type.fibergroup
-        for _ in range(layers_num):
-            feature_repr = self.irreps * channels
-            feature_type = nn.FieldType(self.r2_act, feature_repr)
 
-            activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16)
-            feature_type = activation.out_type
+        activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16)
+        feat_type_out = activation.out_type
 
-            layers.append(nn.R2Conv(cur_type, feature_type, kernel_size=self.kernel_size, padding=self.pad))
+        layers.append(nn.R2Conv(cur_type, feat_type_out, kernel_size=kernel_size, padding=pad))
 
-            layers.append(activation)
+        layers.append(activation)
 
+        layers.append(self.batch_norm(feat_type_out))
 
-            layers.append(self.batch_norm(feature_type))
-
-            cur_type = feature_type
+        cur_type = feat_type_out
         return nn.SequentialModule(*layers), cur_type
     
     def make_adaptive_sampling_fourier_block(self, in_type: nn.FieldType, channels: int, layers_num: int):
@@ -190,7 +223,7 @@ class HNet(torch.nn.Module):
         cur_type = in_type
         G = in_type.fibergroup
         for _ in range(layers_num):
-            feature_repr = self.irreps * channels
+            feature_repr = self.type_2_irreps * channels
             activation = AdaptiveFourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16, adaptive_sampling=True)
             feature_type = nn.FieldType(self.r2_act, feature_repr)
 
@@ -206,17 +239,18 @@ class HNet(torch.nn.Module):
         return nn.SequentialModule(*layers), cur_type
 
     def forward(self, input: torch.Tensor):
-        x = nn.GeometricTensor(input, self.input_type)
 
+        x = nn.GeometricTensor(input, self.input_type)
+        x = self.mask(x)
         # run blocks + pools
-        for block, pool in zip(self.blocks, self.pools):
+        for block in self.blocks: 
             x = block(x)
-            x = pool(x)
 
         # invariant readout
         x = self.invariant_map(x)
-        x = self.avg(x.tensor).squeeze(-1).squeeze(-1)
-        x = self.head(x)
+        x = x.tensor
+        x = self.avg(x)
+        x = self.head(x.view(x.shape[0], -1))
         return x
 
     def forward_features(self, input: torch.Tensor):
@@ -225,9 +259,9 @@ class HNet(torch.nn.Module):
         else:
             x = nn.GeometricTensor(input, self.input_type)
             
-        for block, pool in zip(self.blocks, self.pools):
+        for block in self.blocks:
             x = block(x)
-            x = pool(x)
         x = self.invariant_map(x)
-        x = self.avg(x.tensor).squeeze(-1).squeeze(-1)
+        x = x.tensor
+        x = self.avg(x)
         return x
