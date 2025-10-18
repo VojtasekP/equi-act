@@ -11,7 +11,7 @@ ACT_MAP = {
     "pointwise_elu": "p_elu",
     "fourier_relu": "p_relu",
     "fourier_elu": "p_elu",
-    "gated_relu": "relu",
+    "gated_sigmoid": "sigmoid",
 }
 
 BN_MAP = {
@@ -28,15 +28,17 @@ class HNet(torch.nn.Module):
                  kernels_per_block=(3, 3, 3),
                  paddings_per_block=(1, 1, 1),
                  pool_after_every_n_blocks=2,
-                 activation_type="gated_relu",
+                 activation_type="gated_sigmoid",
                  pool_stride=2,
                  pool_sigma=0.66,
+                 invar_type='norm',
+                 pool_type='max',
                  invariant_channels=64,
                  bn="IIDbn",
                  img_size=29,
                  grey_scale=False):
         super().__init__()
-        assert activation_type in ["gated_relu", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu"]
+        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu"]
         assert bn in ["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"]
         
         assert len(channels_per_block) == len(kernels_per_block) == len(paddings_per_block), "channels_per_block, kernels_per_block and padding_per_block must have the same length"
@@ -58,7 +60,7 @@ class HNet(torch.nn.Module):
         self.pools = torch.nn.ModuleList()
 
         for i, (channels, kernel, padding) in enumerate(zip(channels_per_block, kernels_per_block, paddings_per_block)):
-            if activation_type=="gated_relu":
+            if activation_type=="gated_sigmoid":
                 block, cur_type = self.make_gated_block(
                                         in_type=cur_type,
                                         channels=channels,
@@ -84,20 +86,35 @@ class HNet(torch.nn.Module):
 
 
             if ((i+1) % pool_after_every_n_blocks) == 0 and (i != len(channels_per_block)-1):
-                pool = nn.PointwiseAvgPoolAntialiased2D(cur_type, sigma=pool_sigma, stride=pool_stride)
-                # pool = nn.PointwiseMaxPoolAntialiased2D(cur_type, kernel_size=pool_stride)
+                if pool_type == 'avg':
+                    pool = nn.PointwiseAvgPoolAntialiased2D(cur_type, sigma=pool_sigma, stride=pool_stride)
+                elif pool_type == 'max':
+                    pool = nn.NormMaxPool(cur_type, kernel_size=pool_stride)
+                else:
+                    raise ValueError(f"Unsupported pool type: {pool_type}")
+                cur_type = pool.out_type
                 self.blocks.append(pool)
 
         c = invariant_channels
         self.out_inv_type = nn.FieldType(self.r2_act, c * [self.r2_act.trivial_repr])
-        self.invariant_map = nn.R2Conv(cur_type, self.out_inv_type, kernel_size=1, padding=0, bias=False)
-        # self.invariant_map = nn.NormPool(in_type=cur_type)
+        if invar_type == 'conv2triv':
+            self.invariant_map = nn.R2Conv(cur_type, self.out_inv_type, kernel_size=1, padding=0, bias=False)
+        elif invar_type == 'norm':
+            self.invariant_map = nn.NormPool(in_type=cur_type)
+        else:
+            raise ValueError(f"Unsupported invariant map type: {invar_type}")
         self.avg = torch.nn.AdaptiveAvgPool2d((1, 1))
         invariant_size = len(self.invariant_map.out_type)
         self.head = torch.nn.Sequential(
             torch.nn.Linear(invariant_size, c),
             torch.nn.BatchNorm1d(c),
             torch.nn.ELU(inplace=True),
+            torch.nn.Dropout(p=0.3),
+
+            torch.nn.Linear(c, c),
+            torch.nn.BatchNorm1d(c),
+            torch.nn.ELU(inplace=True),
+            torch.nn.Dropout(p=0.3),
 
             torch.nn.Linear(c, n_classes),
         )
@@ -258,6 +275,7 @@ class HNet(torch.nn.Module):
             x = input
         else:
             x = nn.GeometricTensor(input, self.input_type)
+        x = self.mask(x)
             
         for block in self.blocks:
             x = block(x)

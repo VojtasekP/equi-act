@@ -40,9 +40,11 @@ class LitHnn(L.LightningModule):
                  pool_after_every_n_blocks=2,     
                  pool_stride=2,
                  pool_sigma=0.66,
+                 invar_type='norm', 
+                 pool_type='max',
                  invariant_channels=64,
                  bn=True,
-                 activation_type="gated_relu",
+                 activation_type="gated_sigmoid",
                  lr=0.001,
                  weight_decay=0.01,
                  grey_scale=False,
@@ -63,6 +65,8 @@ class LitHnn(L.LightningModule):
                           pool_after_every_n_blocks=pool_after_every_n_blocks,
                           pool_stride=pool_stride,
                           pool_sigma=pool_sigma,
+                          invar_type=invar_type,
+                          pool_type=pool_type,
                           invariant_channels=invariant_channels,
                           bn=bn,
                           activation_type=activation_type,
@@ -110,22 +114,22 @@ class LitHnn(L.LightningModule):
         self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
-        with torch.no_grad():
-            x, y = batch
-            thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
-            eq_mean = float(curve.mean())
-            self.log('val_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
+        # with torch.no_grad():
+        #     x, y = batch
+        #     thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
+        #     eq_mean = float(curve.mean())
+        #     self.log('val_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.test_acc)
         self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-        with torch.no_grad():
+        # with torch.no_grad():
             # Fix here too
-            x, y = batch
-            thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
-            eq_mean = float(curve.mean())
-            self.log('test_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
+            # x, y = batch
+            # thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
+            # eq_mean = float(curve.mean())
+            # self.log('test_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
@@ -192,6 +196,8 @@ def _train_impl(config):
         activation_type=config.activation_type,
         pool_stride=config.pool_stride,
         pool_sigma=config.pool_sigma,
+        invar_type=config.invar_type,
+        pool_type=config.pool_type,
         invariant_channels=config.invariant_channels,
         bn=config.bn,
         lr=config.lr,
@@ -261,9 +267,11 @@ if __name__ == "__main__":
     parser.add_argument("--kernels_per_block", default=(9, 7, 7, 7, 7, 5))
     parser.add_argument("--paddings_per_block", default=(1, 3, 3, 3, 3, 1))
     parser.add_argument("--pool_after_every_n_blocks", default=2)
-    parser.add_argument("--activation_type", default="gated_relu", choices=["gated_relu","norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
+    parser.add_argument("--activation_type", default="gated_sigmoid", choices=["gated_sigmoid","norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
     parser.add_argument("--pool_stride", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=0.66)
+    parser.add_argument("--invar_type", type=str, default='norm', choices=['conv2triv', 'norm'])
+    parser.add_argument("--pool_type", type=str, default='max', choices=['avg', 'max'])
     parser.add_argument("--invariant_channels", type=int, default=96)
     parser.add_argument("--bn", default="IIDbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
     parser.add_argument("--max_rot_order", type=float, default=1)
