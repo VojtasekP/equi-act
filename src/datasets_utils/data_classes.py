@@ -138,6 +138,7 @@ class HFImageTorchDataset(Dataset):
 def make_transforms(img_size: int) -> Tuple[Compose, Compose]:
 
     train_tf = Compose([
+        Resize(img_size),
         RandomRotation(degrees=(0, 360), interpolation=InterpolationMode.BILINEAR, fill=0),
         ToTensor()
     ])

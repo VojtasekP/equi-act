@@ -50,9 +50,9 @@ parameters:
   weight_decay:
     value: 0.0000001
   burin_in_period:
-    value: 20
+    value: 15
   exp_dump:
-    value: 0.8
+    value: 0.9
   batch_size:
     value: 64
   epochs:

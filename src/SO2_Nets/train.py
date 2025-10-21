@@ -47,8 +47,9 @@ class LitHnn(L.LightningModule):
                  bn=True,
                  activation_type="gated_sigmoid",
                  lr=0.001,
-                 weight_decay=0.01,
+                 weight_decay=0.0001,
                  grey_scale=False,
+                 img_size=29,
                  epochs=200,
                  burin_in_period=5,
                  exp_dump=0.9
@@ -76,7 +77,8 @@ class LitHnn(L.LightningModule):
                           invariant_channels=invariant_channels,
                           bn=bn,
                           activation_type=activation_type,
-                          grey_scale=grey_scale
+                          grey_scale=grey_scale,
+                          img_size=img_size
                           )
 
         self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
@@ -161,10 +163,11 @@ def _train_impl(config):
     seed = getattr(config, "seed", 0)
     random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if torch.cuda.is_available():
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
     logger = WandbLogger(name=config.project, project=config.project)
 
     dataset = getattr(config, "dataset", "None")
@@ -195,12 +198,14 @@ def _train_impl(config):
     model = LitHnn(
         n_classes=n_classes_dm,
         max_rot_order=config.max_rot_order,
+
         channels_per_block=config.channels_per_block,
         kernels_per_block=config.kernels_per_block,
         paddings_per_block=config.paddings_per_block,
         pool_after_every_n_blocks=config.pool_after_every_n_blocks,
         conv_sigma=config.conv_sigma,
         activation_type=config.activation_type,
+
         pool_stride=config.pool_stride,
         pool_sigma=config.pool_sigma,
         invar_type=config.invar_type,
@@ -209,10 +214,12 @@ def _train_impl(config):
         bn=config.bn,
         lr=config.lr,
         weight_decay=config.weight_decay,
-        grey_scale=grey_scale,
         epochs=config.epochs,
         burin_in_period=config.burin_in_period,
-        exp_dump=config.exp_dump
+        exp_dump=config.exp_dump,
+        
+        grey_scale=grey_scale,
+        img_size=config.img_size
     )
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
