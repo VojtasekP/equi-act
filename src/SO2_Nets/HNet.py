@@ -1,7 +1,7 @@
 import torch
 from escnn import gspaces, nn
-
-
+from typing import List, Tuple, Optional
+from escnn.group import directsum
 ACT_MAP = {
     "norm_relu": "n_relu",
     "norm_sigmoid": "n_sigmoid",
@@ -12,6 +12,7 @@ ACT_MAP = {
     "fourier_relu": "p_relu",
     "fourier_elu": "p_elu",
     "gated_sigmoid": "sigmoid",
+    "gated_shared_sigmoid": "sigmoid"
 }
 
 BN_MAP = {
@@ -20,6 +21,34 @@ BN_MAP = {
     "FieldNorm": nn.FieldNorm,
     "GNormBatchNorm": nn.GNormBatchNorm
 }
+
+def _split_scalar_vector(ft: nn.FieldType) -> Tuple[List[int], List[int]]:
+    # For SO(2)/O(2): 1D = scalar/pseudoscalar, 2D = vector (k>0 real irreps)
+    scalar_idx = [i for i, rep in enumerate(ft.representations) if rep.size == 1]
+    vector_idx = [i for i, rep in enumerate(ft.representations) if rep.size == 2]
+    return scalar_idx, vector_idx
+
+def _labels_for_fields(n_fields: int, scalar_idx: List[int]) -> List[str]:
+    scalar_set = set(scalar_idx)
+    return ['scalar' if i in scalar_set else 'vector' for i in range(n_fields)]
+
+class RetypeModule(nn.EquivariantModule):
+    def __init__(self, in_type:nn.FieldType, out_type: nn.FieldType):
+        super().__init__()
+        self.in_type = in_type
+        self.out_type = out_type
+
+    def forward(self, input: nn.GeometricTensor) -> nn.GeometricTensor:
+        return nn.GeometricTensor(input.tensor, self.out_type)
+    
+    def evaluate_output_shape(self, input_shape):
+        # identity on the data shape
+        return input_shape
+
+    def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-6):
+        # You can optionally implement a quick stochastic check here,
+        # but for a pure retype this is usually skipped or delegated.
+        return True
 class HNet(torch.nn.Module):
     def __init__(self,
                  n_classes=10,
@@ -27,6 +56,7 @@ class HNet(torch.nn.Module):
                  channels_per_block=(8, 16, 128),
                  kernels_per_block=(3, 3, 3),
                  paddings_per_block=(1, 1, 1),
+                 conv_sigma=0.6,
                  pool_after_every_n_blocks=2,
                  activation_type="gated_sigmoid",
                  pool_stride=2,
@@ -38,14 +68,13 @@ class HNet(torch.nn.Module):
                  img_size=29,
                  grey_scale=False):
         super().__init__()
-        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu"]
+        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu", "gated_shared_sigmoid"]
         assert bn in ["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"]
         
         assert len(channels_per_block) == len(kernels_per_block) == len(paddings_per_block), "channels_per_block, kernels_per_block and padding_per_block must have the same length"
         self.r2_act = gspaces.rot2dOnR2(-1, maximum_frequency=max_rot_order)
         self.max_rot_order = max_rot_order
-
-        self._create_irreps(bn)
+        self.conv_sigma = conv_sigma
         self._create_input_type(grey_scale)
 
 
@@ -81,15 +110,37 @@ class HNet(torch.nn.Module):
                                         channels=channels,
                                         kernel_size=kernel,
                                         pad=padding)
-
+            elif activation_type in ["gated_shared"]:
+                block, cur_type = self.make_gated_block_shared(
+                                        in_type=cur_type,
+                                        channels=channels,
+                                        kernel_size=kernel,
+                                        pad=padding)
+            elif activation_type in ["gated_shared_sigmoid"]:
+                block, cur_type = self.make_gated_block_shared(
+                                        in_type=cur_type,
+                                        channels=channels,
+                                        kernel_size=kernel,
+                                        pad=padding)
             self.blocks.append(block)
 
-
+            labels = ["trivial" if r.is_trivial() else "others" for r in cur_type]
+            cur_type_labeled = cur_type.group_by_labels(labels)
+            trivials = cur_type_labeled["trivial"]
+            others = cur_type_labeled["others"]
             if ((i+1) % pool_after_every_n_blocks) == 0 and (i != len(channels_per_block)-1):
                 if pool_type == 'avg':
                     pool = nn.PointwiseAvgPoolAntialiased2D(cur_type, sigma=pool_sigma, stride=pool_stride)
                 elif pool_type == 'max':
-                    pool = nn.NormMaxPool(cur_type, kernel_size=pool_stride)
+                    modules = [
+                        (nn.PointwiseMaxPool2D(trivials, kernel_size=pool_stride), 'trivial'),
+                        (nn.NormMaxPool(others, kernel_size=pool_stride), 'others')
+                    ]
+                    pool = nn.MultipleModule(
+                        in_type=cur_type,
+                        labels=labels,
+                        modules=modules
+                    )
                 else:
                     raise ValueError(f"Unsupported pool type: {pool_type}")
                 cur_type = pool.out_type
@@ -100,28 +151,27 @@ class HNet(torch.nn.Module):
         if invar_type == 'conv2triv':
             self.invariant_map = nn.R2Conv(cur_type, self.out_inv_type, kernel_size=1, padding=0, bias=False)
         elif invar_type == 'norm':
-            self.invariant_map = nn.NormPool(in_type=cur_type)
+            modules = [
+                (nn.IdentityModule(trivials), 'trivial'),
+                (nn.NormPool(others), 'others')
+            ]
+            self.invariant_map = nn.MultipleModule(
+                in_type=cur_type,
+                labels=labels,
+                modules=modules
+            )
         else:
             raise ValueError(f"Unsupported invariant map type: {invar_type}")
         self.avg = torch.nn.AdaptiveAvgPool2d((1, 1))
         invariant_size = len(self.invariant_map.out_type)
+
         self.head = torch.nn.Sequential(
             torch.nn.Linear(invariant_size, c),
             torch.nn.BatchNorm1d(c),
             torch.nn.ELU(inplace=True),
-            torch.nn.Dropout(p=0.3),
-
-            torch.nn.Linear(c, c),
-            torch.nn.BatchNorm1d(c),
-            torch.nn.ELU(inplace=True),
-            torch.nn.Dropout(p=0.3),
 
             torch.nn.Linear(c, n_classes),
         )
-    def _create_irreps(self, bn_type):
-        
-        self.type_1_irrep = [self.r2_act.irrep(0)]        
-        self.type_2_irreps = [self.r2_act.irrep(m) for m in range(1, self.max_rot_order + 1)]
 
     def _create_input_type(self, grey_scale):
         if grey_scale:
@@ -146,18 +196,18 @@ class HNet(torch.nn.Module):
         layers = []
         cur_type = in_type
 
-        vector_rep = self.type_2_irreps * channels
-        scalar_rep = self.type_1_irrep * channels
+        vector_rep = [self.r2_act.irrep(m) for m in range(1, self.max_rot_order + 1)] * channels
+        scalar_rep = [self.r2_act.irrep(0)] * channels
 
         scalar_field = nn.FieldType(self.r2_act, scalar_rep)
         vector_field = nn.FieldType(self.r2_act, vector_rep)
-        
-        feat_type_out = scalar_field + vector_field
 
         gate_repr = [self.r2_act.trivial_repr] * len(vector_rep)
         gate_field = nn.FieldType(self.r2_act, gate_repr) + vector_field
         full_field = scalar_field + gate_field
-        layers.append(nn.R2Conv(cur_type, full_field, kernel_size=kernel_size, padding=pad))
+        layers.append(
+            nn.R2Conv(cur_type, full_field, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma)
+        )
 
         non_linearity = nn.MultipleModule(in_type=full_field, 
                                         labels=['elu']*len(scalar_rep) + ['gate']*len(gate_field),
@@ -165,27 +215,86 @@ class HNet(torch.nn.Module):
                                         )
         layers.append(non_linearity)
 
+        cur_type = layers[-1].out_type
+        labels = ["trivial" if r.is_trivial() else "others" for r in cur_type]
+        cur_type_labeled = cur_type.group_by_labels(labels)
+        trivials = cur_type_labeled["trivial"]
+        others = cur_type_labeled["others"]
+
         if self.bn_type == "Normbn":
-            identity = nn.IdentityModule(scalar_field)
-            batch_norm = nn.MultipleModule(in_type=feat_type_out,
-                                        labels=['none']*len(scalar_rep) + ['norm']*len(vector_rep),
-                                        modules=[(identity, 'none'), (self.batch_norm(vector_field), 'norm')]
+
+            batch_norm = nn.MultipleModule(in_type=cur_type,
+                                          labels=labels,
+                                          modules=[(nn.InnerBatchNorm(trivials), 'trivial'), 
+                                                   (self.batch_norm(others), 'others')]
                                         )
-            layers.append(batch_norm)
-        else:               
-            layers.append(self.batch_norm(feat_type_out))
+        else:
+            batch_norm = self.batch_norm(cur_type)
+        layers.append(batch_norm)
 
 
-        cur_type = feat_type_out
+        cur_type = layers[-1].out_type
 
         return nn.SequentialModule(*layers), cur_type
+    def make_gated_block_shared(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
 
+        layers = []
+        cur_type = in_type
+        vector_rep = [self.r2_act.irrep(m) for m in range(1, self.max_rot_order + 1)] # without * channels, after directsum we will multiply
+        scalar_rep = [self.r2_act.irrep(0)] * channels
+        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
+
+        vec_rep_dirsum= directsum(vector_rep, name="vec")
+        vector_field = nn.FieldType(self.r2_act, [vec_rep_dirsum] * channels)
+
+        gates = nn.FieldType(self.r2_act, scalar_rep)
+
+        gate_field = (gates + vector_field).sorted()
+
+        full_field = (scalar_field + gate_field).sorted()
+        layers.append(
+            nn.R2Conv(cur_type, full_field, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma)
+        )
+
+        # nelinearity: ELU na scalars, GatedNL na (gates ⊕ vector), gates po NL dropneme
+        non_linearity = nn.MultipleModule(
+            in_type=full_field,
+            labels=["scalar"] * len(scalar_field) + ["gate"] * len(gate_field),
+            modules=[
+                (nn.ELU(scalar_field), "scalar"),
+                (nn.GatedNonLinearity1(gate_field, drop_gates=True), "gate"),
+            ],
+        )
+        layers.append(non_linearity)
+
+
+        cur_type = layers[-1].out_type
+        labels = ["trivial" if r.is_trivial() else "others" for r in cur_type]
+        cur_type_labeled = cur_type.group_by_labels(labels)
+        trivials = cur_type_labeled["trivial"]
+        others = cur_type_labeled["others"]
+
+        if self.bn_type == "Normbn":
+
+            batch_norm = nn.MultipleModule(in_type=cur_type,
+                                          labels=labels,
+                                          modules=[(nn.InnerBatchNorm(trivials), 'trivial'), 
+                                                   (self.batch_norm(others), 'others')]
+                                        )
+        else:
+            batch_norm = self.batch_norm(cur_type)
+
+        layers.append(batch_norm)
+        cur_type = layers[-1].out_type
+
+        return nn.SequentialModule(*layers), cur_type
     def make_norm_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
         layers = []
         cur_type = in_type
         bias = True if self.non_linearity in ['n_relu', 'n_softplus'] else False
-        vector_rep = self.type_2_irreps * channels
-        scalar_rep = self.type_1_irrep * channels
+        
+        vector_rep = [self.r2_act.irrep(m) for m in range(1, self.max_rot_order + 1)] * channels
+        scalar_rep = [self.r2_act.irrep(0)] * channels
         
         scalar_field = nn.FieldType(self.r2_act, scalar_rep)
         vector_field = nn.FieldType(self.r2_act, vector_rep)
@@ -198,41 +307,60 @@ class HNet(torch.nn.Module):
         norm_nonlin = nn.NormNonLinearity(in_type=vector_field, function=self.non_linearity, bias=bias)
 
         non_linearity = nn.MultipleModule(in_type=feat_type_out, 
-                                            labels=['elu']*len(scalar_rep) + ['norm']*len(vector_rep), 
-                                            modules=[(elu,'elu'), (norm_nonlin, 'norm')]
+                                            labels=['scalar']*len(scalar_rep) + ['vector']*len(vector_rep), 
+                                            modules=[(elu,'scalar'), (norm_nonlin, 'vector')]
                                             )
 
         layers.append(non_linearity)
-        if self.bn_type == "Normbn":
-            identity = nn.IdentityModule(scalar_field)
-            batch_norm = nn.MultipleModule(in_type=feat_type_out,
-                                        labels=['none']*len(scalar_rep) + ['norm']*len(vector_rep),
-                                        modules=[(identity, 'none'), (self.batch_norm(vector_field), 'norm')]
-                                        )
-            layers.append(batch_norm)
-        else:               
-            layers.append(self.batch_norm(feat_type_out))
 
-        cur_type = feat_type_out
+
+        if self.bn_type == "Normbn":
+            inner_bn = nn.InnerBatchNorm(scalar_field)
+            batch_norm = nn.MultipleModule(in_type=feat_type_out,
+                                        labels=['scalar']*len(scalar_rep) + ['vector']*len(vector_rep),
+                                        modules=[(inner_bn, 'scalar'), (self.batch_norm(vector_field), 'vector')])
+        else:
+            batch_norm = self.batch_norm(feat_type_out)
+        layers.append(batch_norm)
+
+        cur_type = layers[-1].out_type
 
         return nn.SequentialModule(*layers), cur_type
     
     def make_fourier_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
         layers = []
         cur_type = in_type
-        scalar_field = nn.FieldType(self.r2_act, self.type_1_irrep * channels)
+
+        reps = [self.r2_act.irrep(m) for m in range(0, self.max_rot_order + 1)]
+        full_rep = reps * channels
+        base_field = nn.FieldType(self.r2_act, full_rep)
         G = in_type.fibergroup
 
         activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=16)
-        feat_type_out = activation.out_type
+        feat_type_out = activation.in_type
 
-        layers.append(nn.R2Conv(cur_type, feat_type_out, kernel_size=kernel_size, padding=pad))
+        layers.append(nn.R2Conv(cur_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=0.6))
 
         layers.append(activation)
+        layers.append(RetypeModule(feat_type_out,base_field))
 
-        layers.append(self.batch_norm(feat_type_out))
+        cur_type = layers[-1].out_type
+        labels = ["trivial" if r.is_trivial() else "others" for r in cur_type]
+        cur_type_labeled = cur_type.group_by_labels(labels)
+        trivials = cur_type_labeled["trivial"]
+        others = cur_type_labeled["others"]
 
-        cur_type = feat_type_out
+        if self.bn_type == "Normbn":
+
+            batch_norm = nn.MultipleModule(in_type=cur_type,
+                                          labels=labels,
+                                          modules=[(nn.InnerBatchNorm(trivials), 'trivial'), 
+                                                   (self.batch_norm(others), 'others')]
+                                        )
+        else:
+            batch_norm = self.batch_norm(cur_type)
+        layers.append(batch_norm)
+        cur_type = layers[-1].out_type
         return nn.SequentialModule(*layers), cur_type
     
     def make_adaptive_sampling_fourier_block(self, in_type: nn.FieldType, channels: int, layers_num: int):

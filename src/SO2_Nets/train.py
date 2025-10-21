@@ -37,6 +37,7 @@ class LitHnn(L.LightningModule):
                  channels_per_block=(8, 16, 32),          # number of channels per block
                  kernels_per_block=(3, 3, 3),           # kernel size per block
                  paddings_per_block=(1, 1, 1),          # padding per block
+                 conv_sigma=0.6,
                  pool_after_every_n_blocks=2,     
                  pool_stride=2,
                  pool_sigma=0.66,
@@ -48,7 +49,9 @@ class LitHnn(L.LightningModule):
                  lr=0.001,
                  weight_decay=0.01,
                  grey_scale=False,
-                 epochs=200
+                 epochs=200,
+                 burin_in_period=5,
+                 exp_dump=0.9
                  ):
         super().__init__()
 
@@ -57,12 +60,15 @@ class LitHnn(L.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
         self.epochs = epochs
+        self.burn_in_period = burin_in_period
+        self.exp_dump = exp_dump
         self.model = HNet(n_classes=n_classes,
                           max_rot_order=max_rot_order,
                           channels_per_block=channels_per_block,
                           kernels_per_block=kernels_per_block,
                           paddings_per_block=paddings_per_block,
                           pool_after_every_n_blocks=pool_after_every_n_blocks,
+                          conv_sigma=conv_sigma,
                           pool_stride=pool_stride,
                           pool_sigma=pool_sigma,
                           invar_type=invar_type,
@@ -105,8 +111,8 @@ class LitHnn(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.train_acc)
-        self.log('train_loss', loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
-        self.log('train_acc',  acc,  prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log('train_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log('train_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -114,22 +120,22 @@ class LitHnn(L.LightningModule):
         self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
-        # with torch.no_grad():
-        #     x, y = batch
-        #     thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
-        #     eq_mean = float(curve.mean())
-        #     self.log('val_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
+        with torch.no_grad():
+            x, y = batch
+            thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
+            eq_mean = float(curve.mean())
+            self.log('val_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.test_acc)
         self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         # with torch.no_grad():
-            # Fix here too
-            # x, y = batch
-            # thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
-            # eq_mean = float(curve.mean())
-            # self.log('test_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
+        #     Fix here too
+        #     x, y = batch
+        #     thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
+        #     eq_mean = float(curve.mean())
+        #     self.log('test_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
@@ -137,10 +143,10 @@ class LitHnn(L.LightningModule):
         scheduler = optim.lr_scheduler.SequentialLR(
                     optimizer,
                     schedulers=[
-                        optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=10),
-                        optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
+                        optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=self.burn_in_period),
+                        optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.exp_dump)
                     ],
-                    milestones=[10]
+                    milestones=[self.burn_in_period]
                 )
 
         return {
@@ -193,6 +199,7 @@ def _train_impl(config):
         kernels_per_block=config.kernels_per_block,
         paddings_per_block=config.paddings_per_block,
         pool_after_every_n_blocks=config.pool_after_every_n_blocks,
+        conv_sigma=config.conv_sigma,
         activation_type=config.activation_type,
         pool_stride=config.pool_stride,
         pool_sigma=config.pool_sigma,
@@ -203,7 +210,9 @@ def _train_impl(config):
         lr=config.lr,
         weight_decay=config.weight_decay,
         grey_scale=grey_scale,
-        epochs=config.epochs
+        epochs=config.epochs,
+        burin_in_period=config.burin_in_period,
+        exp_dump=config.exp_dump
     )
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
@@ -259,22 +268,25 @@ if __name__ == "__main__":
     parser.add_argument("--name", type=str, default="HNet_experiment")
     parser.add_argument("--dataset", type=str, default="mnist_rot",
                         choices=["mnist_rot", "resisc45", "colorectal_hist"])
-    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
-    parser.add_argument("--channels_per_block", default=(24, 32, 36, 36, 64, 96))
-    parser.add_argument("--kernels_per_block", default=(9, 7, 7, 7, 7, 5))
-    parser.add_argument("--paddings_per_block", default=(1, 3, 3, 3, 3, 1))
+    parser.add_argument("--burin_in_period", type=int, default=5)
+    parser.add_argument("--exp_dump", type=float, default=0.9)
+    parser.add_argument("--channels_per_block", default=(16, 24, 32, 32, 48, 64))
+    parser.add_argument("--kernels_per_block", default=(7, 5, 5, 5, 5, 5))
+    parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 1))
+    parser.add_argument("--conv_sigma", type=float, default=0.6)
     parser.add_argument("--pool_after_every_n_blocks", default=2)
-    parser.add_argument("--activation_type", default="gated_sigmoid", choices=["gated_sigmoid","norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
+    parser.add_argument("--activation_type", default="fourier_relu", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
     parser.add_argument("--pool_stride", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=0.66)
     parser.add_argument("--invar_type", type=str, default='norm', choices=['conv2triv', 'norm'])
     parser.add_argument("--pool_type", type=str, default='max', choices=['avg', 'max'])
-    parser.add_argument("--invariant_channels", type=int, default=96)
+    parser.add_argument("--invariant_channels", type=int, default=64)
     parser.add_argument("--bn", default="IIDbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
-    parser.add_argument("--max_rot_order", type=float, default=1)
+    parser.add_argument("--max_rot_order", type=float, default=3)
     parser.add_argument("--img_size", type=int, default=29)
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--seed", type=int, default=0)
