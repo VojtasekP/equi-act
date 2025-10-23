@@ -49,10 +49,10 @@ class RetypeModule(nn.EquivariantModule):
         # You can optionally implement a quick stochastic check here,
         # but for a pure retype this is usually skipped or delegated.
         return True
-class HNet(torch.nn.Module):
+class R2RotNet(torch.nn.Module):
     def __init__(self,
                  n_classes=10,
-                 max_rot_order=2,
+                 group_spec=("SO2", 4),
                  channels_per_block=(8, 16, 128),
                  kernels_per_block=(3, 3, 3),
                  paddings_per_block=(1, 1, 1),
@@ -72,22 +72,24 @@ class HNet(torch.nn.Module):
         assert bn in ["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"]
         
         assert len(channels_per_block) == len(kernels_per_block) == len(paddings_per_block), "channels_per_block, kernels_per_block and padding_per_block must have the same length"
-        self.r2_act = gspaces.rot2dOnR2(-1, maximum_frequency=max_rot_order)
-        self.max_rot_order = max_rot_order
-        self.conv_sigma = conv_sigma
-        self._create_input_type(grey_scale)
 
+        self.group_spec = group_spec
+        self._build_group()
+        self.conv_sigma = conv_sigma
+        self._in_channels = 1 if grey_scale else 3
+        self._create_input_type(grey_scale)
 
         self.img_size = img_size
         self.mask = nn.MaskModule(self.input_type, img_size, margin=1)
-
-        self.batch_norm = self._create_bn(bn) # create batch norm object
         self.bn_type = bn
+        self.batch_norm = self._create_bn() # create batch norm object
         self.non_linearity = self._create_fund_non_linearity(activation_type) # determines the non-linearity used in norm and fourier blocks, gated is fixed on relu
-        cur_type = self.input_type
+
+
         self.blocks = torch.nn.ModuleList()
         self.pools = torch.nn.ModuleList()
 
+        cur_type = self.input_type
         for i, (channels, kernel, padding) in enumerate(zip(channels_per_block, kernels_per_block, paddings_per_block)):
             if activation_type=="gated_sigmoid":
                 block, cur_type = self.make_gated_block(
@@ -172,18 +174,29 @@ class HNet(torch.nn.Module):
 
             torch.nn.Linear(c, n_classes),
         )
-
-    def _create_input_type(self, grey_scale):
-        if grey_scale:
-            self.input_type = nn.FieldType(self.r2_act, [self.r2_act.trivial_repr])
+    def _build_group(self):
+        if self.group_spec[0] == "SO2":
+            self.r2_act = gspaces.rot2dOnR2(-1, maximum_frequency=self.group_spec[1])
+            self.max_rot_order = self.group_spec[1]
+        elif self.group_spec[0] == "O2":
+            self.r2_act = gspaces.flip2dOnR2(-1, maximum_frequency=self.group_spec[1])
+            self.max_rot_order = self.group_spec[1]
+        elif self.group_spec[0] == "C_N":
+            self.r2_act = gspaces.rot2dOnR2(N=self.group_spec[1])
+        elif self.group_spec[0] == "D_N":
+            self.r2_act = gspaces.flip2dOnR2(N=self.group_spec[1])
         else:
-            self.input_type = nn.FieldType(self.r2_act, 3 * [self.r2_act.trivial_repr])
+            raise ValueError(f"Unsupported group type: {self.group_spec[0]}")
+    def _create_input_type(self, grey_scale):
+        # So this creates the input field type the input group, for discrete groups its regular representation
+        pass
 
-    def _create_bn(self, bn_type):
+
+    def _create_bn(self):
         try:
-            return BN_MAP[bn_type]
+            return BN_MAP[self.bn_type]
         except KeyError:
-            raise ValueError(f"Unsupported batch norm type: {bn_type}")
+            raise ValueError(f"Unsupported batch norm type: {self.bn_type}")
 
     def _create_fund_non_linearity(self, activation_type):
         try:

@@ -16,11 +16,27 @@ def tex_escape(s):
     repl = {
         '&': r'\&', '%': r'\%', '$': r'\$', '#': r'\#', '_': r'\_',
         '{': r'\{', '}': r'\}', '~': r'\textasciitilde{}',
-        '^': r'\textasciicircum{}', '\\': r'\textbackslash{}',
+        '^': r'\textasciicircum{}', '\\': '_',
     }
     for k, v in repl.items():
         s = s.replace(k, v)
     return s
+
+# Pretty-print activation names for LaTeX: turn underscores/backslashes into spaces,
+# then escape remaining special characters.
+def pretty_activation(s):
+    if pd.isna(s):
+        return ""
+    s = str(s)
+    # Normalize any LaTeX-escaped underscore to a plain underscore first
+    s = s.replace(r"\_", "_")
+    # Replace underscores with spaces
+    s = s.replace("_", " ")
+    # Drop any remaining backslashes (e.g., from pre-escaped inputs)
+    s = s.replace("\\", "")
+    # Collapse repeated whitespace
+    s = " ".join(s.split())
+    return tex_escape(s)
 
 df = pd.read_csv(CSV_PATH)
 
@@ -63,7 +79,7 @@ def fmt_err(mean, std, dec=3):
 
 table_rows = []
 for _, r in df.iterrows():
-    act = tex_escape(r["activation"])
+    act = pretty_activation(r["activation"])  # nicer label without backslashes/underscores
     bn  = tex_escape(r["bn"])
     test_err_cell = fmt_pct(err_mean_pct.loc[_], err_std_pct.loc[_], ACC_DEC)
     invar_cell    = fmt_err(r["test_invar_error_mean"], r["test_invar_error_std"], ERR_DEC)

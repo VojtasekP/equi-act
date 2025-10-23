@@ -13,7 +13,7 @@ import lightning as L
 from lightning.pytorch.loggers import WandbLogger
 
 import wandb
-from SO2_Nets.HNet import HNet
+from SO2_Nets.R2Net import R2Net
 from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, MnistRotDataset
 import argparse
 import equivariance_metric as em
@@ -39,7 +39,7 @@ class LitHnn(L.LightningModule):
                  paddings_per_block=(1, 1, 1),          # padding per block
                  conv_sigma=0.6,
                  pool_after_every_n_blocks=2,     
-                 pool_stride=2,
+                 pool_size=2,
                  pool_sigma=0.66,
                  invar_type='norm', 
                  pool_type='max',
@@ -63,14 +63,14 @@ class LitHnn(L.LightningModule):
         self.epochs = epochs
         self.burn_in_period = burin_in_period
         self.exp_dump = exp_dump
-        self.model = HNet(n_classes=n_classes,
+        self.model = R2Net(n_classes=n_classes,
                           max_rot_order=max_rot_order,
                           channels_per_block=channels_per_block,
                           kernels_per_block=kernels_per_block,
                           paddings_per_block=paddings_per_block,
                           pool_after_every_n_blocks=pool_after_every_n_blocks,
                           conv_sigma=conv_sigma,
-                          pool_stride=pool_stride,
+                          pool_size=pool_size,
                           pool_sigma=pool_sigma,
                           invar_type=invar_type,
                           pool_type=pool_type,
@@ -132,12 +132,12 @@ class LitHnn(L.LightningModule):
         loss, acc = self.shared_step(batch, self.test_acc)
         self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-        # with torch.no_grad():
-        #     Fix here too
-        #     x, y = batch
-        #     thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
-        #     eq_mean = float(curve.mean())
-        #     self.log('test_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
+        with torch.no_grad():
+            # Fix here too
+            x, y = batch
+            thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
+            eq_mean = float(curve.mean())
+            self.log('test_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
@@ -166,8 +166,6 @@ def _train_impl(config):
     if torch.cuda.is_available():
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
     logger = WandbLogger(name=config.project, project=config.project)
 
     dataset = getattr(config, "dataset", "None")
@@ -206,7 +204,7 @@ def _train_impl(config):
         conv_sigma=config.conv_sigma,
         activation_type=config.activation_type,
 
-        pool_stride=config.pool_stride,
+        pool_size=config.pool_size,
         pool_sigma=config.pool_sigma,
         invar_type=config.invar_type,
         pool_type=config.pool_type,
@@ -235,7 +233,7 @@ def _train_impl(config):
         devices=1,
         strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
         precision="32-true",
-        deterministic=True,     # was False
+        deterministic=False,
         benchmark=False,
         log_every_n_steps=50,
     )
@@ -283,11 +281,11 @@ if __name__ == "__main__":
     parser.add_argument("--exp_dump", type=float, default=0.9)
     parser.add_argument("--channels_per_block", default=(16, 24, 32, 32, 48, 64))
     parser.add_argument("--kernels_per_block", default=(7, 5, 5, 5, 5, 5))
-    parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 1))
+    parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 0))
     parser.add_argument("--conv_sigma", type=float, default=0.6)
     parser.add_argument("--pool_after_every_n_blocks", default=2)
-    parser.add_argument("--activation_type", default="fourier_relu", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
-    parser.add_argument("--pool_stride", type=int, default=2)
+    parser.add_argument("--activation_type", default="gated_sigmoid", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
+    parser.add_argument("--pool_size", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=0.66)
     parser.add_argument("--invar_type", type=str, default='norm', choices=['conv2triv', 'norm'])
     parser.add_argument("--pool_type", type=str, default='max', choices=['avg', 'max'])

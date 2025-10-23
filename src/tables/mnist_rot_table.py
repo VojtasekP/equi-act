@@ -6,8 +6,8 @@ from pathlib import Path
 
 # ========= USER INPUTS =========
 ENTITY      = "vojtasek-petr"
-PROJECT     = "mnist_rot_first_try"
-SWEEP_ID    = "547ku2ui"
+PROJECT     = "mnist_rot"
+SWEEP_ID    = "ptg0vwd1"
 ACT_KEY     = "activation_type"   # config key name
 BN_KEY      = "bn"                # config key name
 OUT_CSV     = "wandb_methods_summary.csv"
