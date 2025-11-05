@@ -16,7 +16,7 @@ import wandb
 from SO2_Nets.R2Net import R2Net
 from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, MnistRotDataset
 import argparse
-import equivariance_metric as em
+import nets.equivariance_metric as em
 
 torch.set_num_threads(os.cpu_count())
 torch.set_float32_matmul_precision('high')
@@ -34,6 +34,7 @@ class LitHnn(L.LightningModule):
     def __init__(self,
                  n_classes=10,
                  max_rot_order=2,
+                 flip=False,
                  channels_per_block=(8, 16, 32),          # number of channels per block
                  kernels_per_block=(3, 3, 3),           # kernel size per block
                  paddings_per_block=(1, 1, 1),          # padding per block
@@ -52,7 +53,11 @@ class LitHnn(L.LightningModule):
                  img_size=29,
                  epochs=200,
                  burin_in_period=5,
-                 exp_dump=0.9
+                 exp_dump=0.9,
+                 mnist=False,
+                 invar_error_logging=True,
+                 invar_check_every_n_epochs=1,
+                 invar_chunk_size=4
                  ):
         super().__init__()
 
@@ -65,6 +70,7 @@ class LitHnn(L.LightningModule):
         self.exp_dump = exp_dump
         self.model = R2Net(n_classes=n_classes,
                           max_rot_order=max_rot_order,
+                          flip=flip,
                           channels_per_block=channels_per_block,
                           kernels_per_block=kernels_per_block,
                           paddings_per_block=paddings_per_block,
@@ -78,7 +84,8 @@ class LitHnn(L.LightningModule):
                           bn=bn,
                           activation_type=activation_type,
                           grey_scale=grey_scale,
-                          img_size=img_size
+                          img_size=img_size,
+                          mnist=mnist
                           )
 
         self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
@@ -86,6 +93,39 @@ class LitHnn(L.LightningModule):
         self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
 
         self.eq_num_angles = 16
+        self.invar_error_logging = invar_error_logging
+        self.invar_check_every_n_epochs = max(1, int(invar_check_every_n_epochs))
+        self.invar_chunk_size = max(1, int(invar_chunk_size))
+
+    def _should_log_invar(self, stage: str, batch_idx: int) -> bool:
+        if not self.invar_error_logging:
+            return False
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            return False
+        if stage == "val":
+            if getattr(trainer, "sanity_checking", False):
+                return False
+            if batch_idx != 0:
+                return False
+            if ((self.current_epoch + 1) % self.invar_check_every_n_epochs) != 0:
+                return False
+        elif stage == "test":
+            if batch_idx != 0:
+                return False
+        else:
+            return False
+        return True
+
+    def _compute_invar_error(self, x: torch.Tensor) -> float:
+        with torch.no_grad():
+            _, curve = em.chech_invariance_batch_r2(
+                x,
+                self.model,
+                num_samples=self.eq_num_angles,
+                chunk_size=self.invar_chunk_size,
+            )
+        return float(curve.mean())
 
     def on_fit_start(self):
         # count all trainable parameters
@@ -118,26 +158,24 @@ class LitHnn(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        self.model.eval()
         loss, acc = self.shared_step(batch, self.val_acc)
         self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-
-        with torch.no_grad():
-            x, y = batch
-            thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
-            eq_mean = float(curve.mean())
-            self.log('val_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
+        if self._should_log_invar(stage="val", batch_idx=batch_idx):
+            x, _ = batch
+            eq_mean = self._compute_invar_error(x)
+            self.log('val_equi_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
+        self.model.eval()
         loss, acc = self.shared_step(batch, self.test_acc)
         self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-        with torch.no_grad():
-            # Fix here too
-            x, y = batch
-            thetas, curve = em.chech_invariance_batch(x, self.model, num_samples=self.eq_num_angles)
-            eq_mean = float(curve.mean())
-            self.log('test_invar_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
+        if self._should_log_invar(stage="test", batch_idx=batch_idx):
+            x, _ = batch
+            eq_mean = self._compute_invar_error(x)
+            self.log('test_equi_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
@@ -169,16 +207,16 @@ def _train_impl(config):
     logger = WandbLogger(name=config.project, project=config.project)
 
     dataset = getattr(config, "dataset", "None")
-
+    mnist=False
     if dataset == "mnist_rot":
         datamodule = MnistRotDataModule(batch_size=config.batch_size, 
                                         data_dir="./src/datasets_utils/mnist_rotation_new")
         grey_scale = True
+        mnist=True
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
                                         img_size=getattr(config, "img_size", 256))
         grey_scale = False
-
     elif dataset == "colorectal_hist":
         datamodule = ColorectalHistDataModule(batch_size=config.batch_size,
                                               img_size=getattr(config, "img_size", 150))
@@ -192,12 +230,27 @@ def _train_impl(config):
     wandb.config.update({
         "dataset": dataset
     }, allow_val_change=True)
-
+    channels_per_block_updated = [int(c * config.channels_multiplier) for c in config.channels_per_block]
+    wandb.config.update({
+        "channels_per_block": channels_per_block_updated
+    }, allow_val_change=True)
+    updated_invariant_channels = int(config.invariant_channels*config.channels_multiplier)
+    wandb.config.update({
+        'invariant_channels': updated_invariant_channels}
+    , allow_val_change=True)
+    invar_check_every = getattr(config, "invar_check_every_n_epochs", 1)
+    invar_chunk_size = getattr(config, "invar_chunk_size", 4)
+    wandb.config.update({
+        'invar_check_every_n_epochs': invar_check_every,
+        'invar_chunk_size': invar_chunk_size
+    }, allow_val_change=True)
+    
     model = LitHnn(
         n_classes=n_classes_dm,
         max_rot_order=config.max_rot_order,
+        flip=config.flip,
 
-        channels_per_block=config.channels_per_block,
+        channels_per_block=channels_per_block_updated,
         kernels_per_block=config.kernels_per_block,
         paddings_per_block=config.paddings_per_block,
         pool_after_every_n_blocks=config.pool_after_every_n_blocks,
@@ -208,7 +261,7 @@ def _train_impl(config):
         pool_sigma=config.pool_sigma,
         invar_type=config.invar_type,
         pool_type=config.pool_type,
-        invariant_channels=config.invariant_channels,
+        invariant_channels=updated_invariant_channels,
         bn=config.bn,
         lr=config.lr,
         weight_decay=config.weight_decay,
@@ -217,14 +270,18 @@ def _train_impl(config):
         exp_dump=config.exp_dump,
         
         grey_scale=grey_scale,
-        img_size=config.img_size
+        img_size=config.img_size,
+        mnist=mnist,
+        invar_error_logging=config.invar_error_logging,
+        invar_check_every_n_epochs=invar_check_every,
+        invar_chunk_size=invar_chunk_size
     )
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
                             save_top_k=1, mode='min')
     early = EarlyStopping(monitor='val_loss', mode='min', patience=config.patience, verbose=True)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
-
+    
     trainer = Trainer(
         max_epochs=config.epochs,
         logger=logger,
@@ -232,7 +289,7 @@ def _train_impl(config):
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
-        precision="32-true",
+        precision=config.precision,
         deterministic=False,
         benchmark=False,
         log_every_n_steps=50,
@@ -273,28 +330,36 @@ if __name__ == "__main__":
     parser.add_argument("--name", type=str, default="HNet_experiment")
     parser.add_argument("--dataset", type=str, default="mnist_rot",
                         choices=["mnist_rot", "resisc45", "colorectal_hist"])
+    parser.add_argument("--flip", type=bool, default=False, help="for O2")
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
-    parser.add_argument("--burin_in_period", type=int, default=5)
+    parser.add_argument("--burin_in_period", type=int, default=15)
     parser.add_argument("--exp_dump", type=float, default=0.9)
     parser.add_argument("--channels_per_block", default=(16, 24, 32, 32, 48, 64))
     parser.add_argument("--kernels_per_block", default=(7, 5, 5, 5, 5, 5))
     parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 0))
+    parser.add_argument("--channels_multiplier", type=float, default=1.0)
     parser.add_argument("--conv_sigma", type=float, default=0.6)
     parser.add_argument("--pool_after_every_n_blocks", default=2)
-    parser.add_argument("--activation_type", default="gated_sigmoid", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu"])
+    parser.add_argument("--activation_type", default="gated_sigmoid", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu_16", "fourier_elu_16", "fourier_relu_8", "fourier_elu_8", "fourier_relu_32", "fourier_elu_32", "fourier_relu_4", "fourier_elu_4"])
     parser.add_argument("--pool_size", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=0.66)
     parser.add_argument("--invar_type", type=str, default='norm', choices=['conv2triv', 'norm'])
     parser.add_argument("--pool_type", type=str, default='max', choices=['avg', 'max'])
     parser.add_argument("--invariant_channels", type=int, default=64)
-    parser.add_argument("--bn", default="IIDbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
+    parser.add_argument("--bn", default="Normbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
     parser.add_argument("--max_rot_order", type=float, default=3)
-    parser.add_argument("--img_size", type=int, default=29)
+    parser.add_argument("--img_size", type=int, default=150)
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--invar_error_logging", type=bool, default=True , help="Disable invariance error logging to speed up training")
+    parser.add_argument("--precision", type=str, default="32-true", choices=["16-mixed", "32-true"])
+    parser.add_argument("--invar_check_every_n_epochs", type=int, default=1,
+                        help="How often (in epochs) to run the invariance metric during validation.")
+    parser.add_argument("--invar_chunk_size", type=int, default=4,
+                        help="Number of rotated batches evaluated together when computing invariance error.")
     args = parser.parse_args()
 
     config = vars(args)

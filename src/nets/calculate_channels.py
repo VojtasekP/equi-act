@@ -9,6 +9,7 @@ def adjust_channels(
     max_frequency=3,
     layer_index: int = 1,
     last_layer: bool = False,
+    mnist: bool = True,
 
 ) -> int:
     """
@@ -32,30 +33,26 @@ def adjust_channels(
     print(f"Adjusting channels layer {layer_index}, C={C}")
     # ---- build the "irreps list" as in your code, excluding the trivial ----
     irreps = []
-    if group == rot2dOnR2(maximum_frequency=max_frequency):
-        for m in range(1, max_frequency + 1):
-            irr = group.irrep(m)
-            mult = int(irr.size // irr.sum_of_squares_constituents)
-            irreps.extend([irr] * mult)
-    elif group == flipRot2dOnR2(maximum_frequency=max_frequency):
-        for m in range(1, max_frequency + 1):
-            mult = int(group.irrep(1,m).size // group.irrep(1,m).sum_of_squares_constituents)
-            irreps.extend([group.irrep(1, m)] * mult)
+    for irr in group.irreps:
+        if irr.is_trivial():
+            continue
+        mult = int(irr.size // irr.sum_of_squares_constituents)
+        irreps.extend([irr] * mult)
     # ---- invariant map case: keep number of *output* channels constant across groups ----
     if last_layer:
         size = 0
-        for irr in group.fibergroup.irreps():
-            size += int(irr.size // irr.sum_of_squares_constituents)
-        size = max(size, 1)
+        size = sum((irrep.size // irrep.sum_of_squares_constituents) for irrep in group.irreps)
         print(f"New channel size {int(round(C/size))}")
         return max(1, int(round(C / size)))
 
     # ---- parameter-fix case: keep params roughly constant by compensating kernel basis dimension ----
     if layer_index > 1:
         # r_in and r_out are [trivial] + irreps
+        r_in_ref  = FieldType(group, [group.trivial_repr] + list(irreps))
+        r_out_ref = FieldType(group, [group.trivial_repr] + list(irreps))
         if activation_type in ['fourier_relu', 'fourier_elu', 'norm_relu', 'norm_squash']:
-            r_in  = FieldType(group, [group.trivial_repr] + list(irreps))
-            r_out = FieldType(group, [group.trivial_repr] + list(irreps))
+            r_in  = r_in_ref
+            r_out = r_out_ref
         elif activation_type in ['gated_shared_sigmoid']:
             r_in = FieldType(group, [group.trivial_repr] * 2 + irreps)
             r_out = FieldType(group, [group.trivial_repr] + irreps)
@@ -66,21 +63,26 @@ def adjust_channels(
             r_in = FieldType(group, [group.trivial_repr] * (I + 1) + irreps)
             r_out = FieldType(group, [group.trivial_repr] + irreps)
         tmp = R2Conv(
-            r_in, r_out, kernel_size,
+            r_in, r_out, kernel_size,sigma=0.6
         )
         # basis dimension of constrained kernel space
         t = float(tmp.basisexpansion.dimension())
+        print(f"t: {t}")
 
         # normalize w.r.t. the reference SFCNN factor you had:
         # 16 * s^2 * 3 / 4  (exactly as in your snippet)
-        denom = 16.0 * (kernel_size ** 2) * 3.0 / 4.0
-        t /= denom if denom > 0 else 1.0
+        if mnist:
+            denom = 16.0 * (kernel_size ** 2) * 3.0 / 4.0 # this is from E2 paper, wrt to the 16GCNN
+        else:
+            tmp_2 = R2Conv(r_in_ref, r_out_ref, kernel_size,sigma=0.6) # this is the reference conv to keep params constant wrt to the fourier/norm activations
+            denom = float(tmp_2.basisexpansion.dimension()) # num of params for the reference conv
+        t /= denom if denom > 0 else 1.0 # relative number of params
 
         scale = 1.0 / max(np.sqrt(t), 1e-12)
         print(f"New channel size {int(round(C * scale))}")
         return max(1, int(round(C * scale)))
 
-    # default: unchanged
+
     print(f"New channel size {int(round(C))}")
     return max(1, int(C))
 
@@ -101,7 +103,7 @@ if __name__ == "__main__":
             C,
             gspace,
             kernel_size=k,
-            activation_type='gated_shared_sigmoid',
+            activation_type='gated_sigmoid',
             max_frequency=max_frequency,
             layer_index=layer_idx,
             last_layer=(layer_idx == len(channels))

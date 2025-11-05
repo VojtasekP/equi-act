@@ -7,32 +7,31 @@ metric:
 
 parameters:
   project:
-    value: "colorectal_histology"
+    value: "mnist_rot"
   dataset:
     values: ["mnist_rot"]
   activation_type:
-    values: ["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu"]
+    values: ["fourier_elu_16"]
   bn:
-    values: ["Normbn", "IIDbn"]
+    values: ["Normbn"]
   seed:
-    values: [0, 1, 2]            # validate best config with multiple seeds
+    values: [0, 1, 2, 3, 4]            # validate best config with multiple seeds
     # values: [0, 1, 2, 3, 4,]
   max_rot_order:
-    value: 3
+    values: [3,5,7]
   channels_per_block:
-    # value: [24,  32, 36, 36, 64, 96]
     value: [16, 24, 32, 32, 48, 64]
   kernels_per_block:
     # value: [9, 7, 7, 7, 7, 5]
     value: [7, 5, 5, 5, 5, 5]
   paddings_per_block:
     # value: [1, 3, 3, 3, 3, 1]
-    value: [1, 2, 2, 2, 2, 1]
+    value: [1, 2, 2, 2, 2, 0]
   conv_sigma:
     values: [0.6]
   pool_after_every_n_blocks:
     value: 2
-  pool_stride:
+  pool_size:
     value: 2
   pool_sigma:
     value: 0.66
@@ -48,19 +47,19 @@ parameters:
   lr:
     value: 0.001
   weight_decay:
-    value: 0.0000001
+    value: 0
   burin_in_period:
-    value: 15
+    value: 10
   exp_dump:
-    value: 0.9
+    value: 0.8
   batch_size:
     value: 64
   epochs:
-    value: 45
+    value: 30
   patience:
     value: 60
   img_size:
-    value: 150
+    value: 29
 
 
 
