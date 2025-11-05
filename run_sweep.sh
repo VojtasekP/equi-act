@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_YAML="src/SO2_Nets/sweep_final.yaml"
+DEFAULT_YAML="src/SO2_Nets/sweep_colorectal.yaml"
 
 usage() {
   cat <<'EOF'
 Usage:
   ./run_sweep_multi.sh [SWEEP_YAML] --cuda0 N --cuda1 M [--cudaX K ...]
+  ./run_sweep_multi.sh --sweep path/to/sweep.yaml --cuda0 N --cuda1 M [--cudaX K ...]
 
 Examples:
-  ./run_sweep_multi.sh src/SO2_Nets/sweep_final.yaml --cuda0 8 --cuda1 8
-  ./run_sweep_multi.sh --cuda0 4    # uses default YAML: src/SO2_Nets/sweep_final.yaml
+  ./run_sweep_multi.sh src/SO2_Nets/sweep_configs/sweep_colorectal.yaml --cuda0 8 --cuda1 8
+  ./run_sweep_multi.sh --sweep src/SO2_Nets/sweep_configs/sweep_mnist_final.yaml --cuda0 4
+  ./run_sweep_multi.sh --cuda0 4    # uses default YAML: src/SO2_Nets/sweep_configs/sweep_colorectal.yaml
 
 Notes:
   - Runs `wandb sweep` once, extracts "<entity>/<project>/<sweep_id>",
@@ -20,14 +22,23 @@ EOF
 }
 
 YAML="${DEFAULT_YAML}"
-if [[ $# -gt 0 && "$1" != --* ]]; then
-  YAML="$1"
-  shift
-fi
+YAML_SET=0
 
 declare -A GPU_COUNTS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --sweep)
+      [[ -z "${2:-}" || "${2}" == --* ]] && { echo "Missing YAML path after --sweep"; exit 2; }
+      YAML="$2"
+      YAML_SET=1
+      shift 2
+      ;;
+    --sweep=*)
+      YAML="${1#--sweep=}"
+      [[ -z "$YAML" ]] && { echo "Missing YAML path after --sweep="; exit 2; }
+      YAML_SET=1
+      shift
+      ;;
     --cuda[0-9]*)
       gpu="${1#--cuda}"
       [[ -z "${2:-}" ]] && { echo "Missing count after $1"; exit 2; }
@@ -39,6 +50,12 @@ while [[ $# -gt 0 ]]; do
       usage; exit 0
       ;;
     *)
+      if [[ "$1" != --* && "$YAML_SET" -eq 0 ]]; then
+        YAML="$1"
+        YAML_SET=1
+        shift
+        continue
+      fi
       echo "Unknown arg: $1"
       usage
       exit 2
