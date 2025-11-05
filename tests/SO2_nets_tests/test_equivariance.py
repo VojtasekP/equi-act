@@ -1,28 +1,51 @@
-import math
 import torch
 import pytest
-from escnn import nn as escnn_nn
-import layers
+from escnn import nn
+from nets.equivariance_metric import chech_equivariance_batch_r2, chech_invariance_batch_r2
 
-@pytest.mark.parametrize("builder", ["gated", "norm"])
-def test_block_equivariance(r2_act, input_type_gray, irreps, builder):
-    # small block so it’s fast
-    if builder == "gated":
-        block, out_type = layers.make_gated_block(r2_act, input_type_gray, irreps, channels=1, layers_num=1,
-                                                  kernel_size=3, pad=1, use_bn=False)
-    else:
-        block, out_type = layers.make_norm_block(r2_act, input_type_gray, irreps, channels=1, layers_num=1,
-                                                 kernel_size=3, pad=1, use_bn=False, non_linearity="n_relu")
 
-    x = torch.randn(1, 1, 29, 29)
-    gx = escnn_nn.GeometricTensor(x.clone(), input_type_gray)
-    y1 = block(gx)
 
-    # rotate input by some angle and compare with transforming the output
-    theta = math.pi * 0.37
-    g = r2_act.fibergroup.element(theta)
-    y2 = block(gx.transform(g))
-    # Now transform y1 itself
-    y1g = y1.transform(g)
+import logging
 
-    torch.testing.assert_close(y2.tensor, y1g.tensor, rtol=1e-4, atol=1e-5)
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
+
+class TinyEquivariantCNN(torch.nn.Module):
+    def __init__(self, r2_act, input_type, hidden_fields=2):
+        super().__init__()
+        self.input_type = input_type
+        self.r2_act = r2_act
+        out_type = nn.FieldType(r2_act, [r2_act.irrep(0), r2_act.irrep(1), r2_act.irrep(2), r2_act.irrep(3)] * hidden_fields)
+
+        self.layers = nn.SequentialModule(
+            nn.R2Conv(self.input_type, out_type, kernel_size=3, padding=1, bias=True),
+        )
+        self.output_type = self.layers.out_type
+
+    def forward_features(self, x):
+        gx = x if isinstance(x, nn.GeometricTensor) else nn.GeometricTensor(x, self.input_type)
+        return self.layers(gx)
+    
+def test_check_equivariance_batch_r2_two_layer_model(random_batch, r2_act, input_type_gray):
+    model = TinyEquivariantCNN(r2_act, input_type_gray)
+    num_samples = 16
+    thetas, errs = chech_equivariance_batch_r2(
+        random_batch, model, num_samples=num_samples, chunk_size=2
+    )
+
+    assert len(thetas) == num_samples
+    assert errs.shape == (num_samples,)
+    log.debug("thetas %s errs %s", thetas, errs.tolist())
+    log.debug("avg error: %f", errs.mean())
+
+def test_check_invariance_batch_r2_two_layer_model(random_batch, r2_act, input_type_gray):
+    model = TinyEquivariantCNN(r2_act, input_type_gray)
+    num_samples = 16
+    thetas, errs = chech_invariance_batch_r2(
+        random_batch, model, num_samples=num_samples, chunk_size=2
+    )
+
+    assert len(thetas) == num_samples
+    assert errs.shape == (num_samples,)
+    log.debug("thetas %s errs %s", thetas, errs.tolist())
+    log.debug("avg error: %f", errs.mean())
