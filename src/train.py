@@ -13,7 +13,7 @@ import lightning as L
 from lightning.pytorch.loggers import WandbLogger
 
 import wandb
-from nets import RnNet
+from nets.RnNet import R2Net
 from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, MnistRotDataset
 import argparse
 import nets.equivariance_metric as em
@@ -68,7 +68,7 @@ class LitHnn(L.LightningModule):
         self.epochs = epochs
         self.burn_in_period = burin_in_period
         self.exp_dump = exp_dump
-        self.model = RnNet(n_classes=n_classes,
+        self.model = R2Net(n_classes=n_classes,
                           max_rot_order=max_rot_order,
                           flip=flip,
                           channels_per_block=channels_per_block,
@@ -106,20 +106,29 @@ class LitHnn(L.LightningModule):
         if stage == "val":
             if getattr(trainer, "sanity_checking", False):
                 return False
-            if batch_idx != 0:
-                return False
             if ((self.current_epoch + 1) % self.invar_check_every_n_epochs) != 0:
                 return False
-        elif stage == "test":
-            if batch_idx != 0:
+            num_batches = trainer.num_val_batches
+            if isinstance(num_batches, (list, tuple)):
+                num_batches = sum(int(n) for n in num_batches)
+            num_batches = int(num_batches)
+            if num_batches <= 0:
                 return False
+            if getattr(self, "_val_eq_epoch", None) != self.current_epoch:
+                k = min(16, num_batches)
+                self._val_eq_epoch = self.current_epoch
+                self._val_eq_batches = set(random.sample(range(num_batches), k))
+            if batch_idx not in getattr(self, "_val_eq_batches", set()):
+                return False
+        elif stage == "test":
+            return True
         else:
             return False
         return True
 
-    def _compute_invar_error(self, x: torch.Tensor) -> float:
+    def _compute_equivariant_error(self, x: torch.Tensor) -> float:
         with torch.no_grad():
-            _, curve = em.chech_invariance_batch_r2(
+            _, curve = em.check_equivariance_batch_r2(
                 x,
                 self.model,
                 num_samples=self.eq_num_angles,
@@ -164,7 +173,7 @@ class LitHnn(L.LightningModule):
         self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         if self._should_log_invar(stage="val", batch_idx=batch_idx):
             x, _ = batch
-            eq_mean = self._compute_invar_error(x)
+            eq_mean = self._compute_equivariant_error(x)
             self.log('val_equi_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
@@ -174,7 +183,7 @@ class LitHnn(L.LightningModule):
         self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         if self._should_log_invar(stage="test", batch_idx=batch_idx):
             x, _ = batch
-            eq_mean = self._compute_invar_error(x)
+            eq_mean = self._compute_equivariant_error(x)
             self.log('test_equi_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
         return loss
 
@@ -339,7 +348,7 @@ if __name__ == "__main__":
     parser.add_argument("--exp_dump", type=float, default=0.9)
     parser.add_argument("--channels_per_block", default=(16, 24, 32, 32, 48, 64))
     parser.add_argument("--kernels_per_block", default=(7, 5, 5, 5, 5, 5))
-    parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 0))
+    parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 2))
     parser.add_argument("--channels_multiplier", type=float, default=1.0)
     parser.add_argument("--conv_sigma", type=float, default=0.6)
     parser.add_argument("--pool_after_every_n_blocks", default=2)

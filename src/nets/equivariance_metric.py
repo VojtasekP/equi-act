@@ -86,8 +86,7 @@ def chech_invariance_batch_r2(
     errs = torch.stack(errs).detach().cpu().numpy() 
     return thetas, errs
 
-@torch.inference_mode()
-def chech_equivariance_batch_r2(
+def check_equivariance_batch_r2(
     x: torch.Tensor,
     model,
     num_samples: int = 16,
