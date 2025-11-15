@@ -11,3 +11,4 @@ logs/
 .vscode/
 ModelNet10/
 sweeps/
+testing_ntbks/
