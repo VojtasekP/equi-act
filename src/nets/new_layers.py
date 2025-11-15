@@ -15,6 +15,17 @@ from typing import List, Tuple, Any
 
 import numpy as np
 
+from collections import defaultdict
+
+from torch.nn import Parameter
+
+from escnn.gspaces import *
+from escnn.nn import FieldType
+from escnn.nn import GeometricTensor
+
+
+
+import numpy as np
 
 
 def _build_kernel(G: Group, irrep: List[tuple]):
@@ -164,7 +175,7 @@ class AdaptiveFourierPointwiseSO2(nn.Module):
         x_hat = input.tensor.view(B, Cin, Fsize, H, W)
 
         # 1) predict base direction (type-1 field) and convert to base angle per location
-        v = self.sampling_branch(input).tensor  # (B, 2, H, W)
+        v = self.sampling_branch(x_hat).tensor  # (B, 2, H, W)
         theta0 = self._angles_from_vector(v)    # (B, H, W)
 
         # 2) add fixed offsets to get N sample angles per location
@@ -249,3 +260,668 @@ class AdaptiveFourierPointwiseSO2(nn.Module):
         # return errors
         return np.concatenate(errors).reshape(-1)
 
+
+
+class FourierPointwiseInnerBn(nn.Module):
+
+
+    def __init__(self, in_type: FieldType):
+        pass
+
+    def forward(self, input: GeometricTensor) -> GeometricTensor:
+        pass
+
+    def __init__(
+            self,
+            gspace: GSpace,
+            channels: int,
+            irreps: List,
+            *grid_args,
+            function: str = 'p_relu',
+            inplace: bool = True,
+            out_irreps: List = None,
+            normalize: bool = True,
+            **grid_kwargs
+    ):
+        r"""
+        
+        Applies a Inverse Fourier Transform to sample the input features, apply the pointwise non-linearity in the
+        group domain (Dirac-delta basis) and, finally, computes the Fourier Transform to obtain irreps coefficients.
+        
+        .. warning::
+            This operation is only *approximately* equivariant and its equivariance depends on the sampling grid and the
+            non-linear activation used, as well as the original band-limitation of the input features.
+            
+        The same function is applied to every channel independently.
+        By default, the input representation is preserved by this operation and, therefore, it equals the output
+        representation.
+        Optionally, the output can have a different band-limit by using the argument ``out_irreps``.
+        
+        The class first constructs a band-limited regular representation of ```gspace.fibergroup``` using
+        :meth:`escnn.group.Group.spectral_regular_representation`.
+        The band-limitation of this representation is specified by ```irreps``` which should be a list containing
+        a list of ids identifying irreps of ```gspace.fibergroup``` (see :attr:`escnn.group.IrreducibleRepresentation.id`).
+        This representation is used to define the input and output field types, each containing ```channels``` copies
+        of a feature field transforming according to this representation.
+        A feature vector transforming according to such representation is interpreted as a vector of coefficients
+        parameterizing a function over the group using a band-limited Fourier basis.
+
+        .. note::
+            Instead of building the list ``irreps`` manually, most groups implement a method ``bl_irreps()`` which can be
+            used to generate this list with through a simpler interface. Check each group's documentation.
+        
+        To approximate the Fourier transform, this module uses a finite number of samples from the group.
+        The set of samples used is specified by the ```grid_args``` and ```grid_kwargs``` which are forwarded to
+        the method :meth:`~escnn.group.Group.grid`.
+        
+        Args:
+            gspace (GSpace):  the gspace describing the symmetries of the data. The Fourier transform is
+                              performed over the group ```gspace.fibergroup```
+            channels (int): number of independent fields in the input `FieldType`
+            irreps (list): list of irreps' ids to construct the band-limited representation
+            function (str): the identifier of the non-linearity.
+                    It is used to specify which function to apply.
+                    By default (``'p_relu'``), ReLU is used.
+            *grid_args: parameters used to construct the discretization grid
+            inplace (bool): applies the non-linear activation in-place. Default: `True`
+            out_irreps (list, optional): optionally, one can specify a different band-limiting in output
+            normalize (bool, optional): if ``True``, the rows of the IFT matrix (and the columns of the FT matrix) are normalized. Default: ``True``
+            **grid_kwargs: keyword parameters used to construct the discretization grid
+            
+        """
+
+        assert isinstance(gspace, GSpace)
+        
+        super(FourierPointwise, self).__init__()
+
+        self.space = gspace
+        
+        G: Group = gspace.fibergroup
+        
+        self.rho = G.spectral_regular_representation(*irreps, name=None)
+
+        self.in_type = FieldType(self.space, [self.rho] * channels)
+
+        if out_irreps is None:
+            # the representation in input is preserved
+            self.out_type = self.in_type
+            self.rho_out = self.rho
+        else:
+            self.rho_out = G.spectral_regular_representation(*out_irreps, name=None)
+            self.out_type = FieldType(self.space, [self.rho_out] * channels)
+
+        # retrieve the activation function to apply
+        if function == 'p_relu':
+            self._function = F.relu_ if inplace else F.relu
+        elif function == 'p_elu':
+            self._function = F.elu_ if inplace else F.elu
+        elif function == 'p_sigmoid':
+            self._function = torch.sigmoid_ if inplace else F.sigmoid
+        elif function == 'p_tanh':
+            self._function = torch.tanh_ if inplace else F.tanh
+        else:
+            raise ValueError('Function "{}" not recognized!'.format(function))
+        
+        kernel = _build_kernel(G, irreps)
+        assert kernel.shape[0] == self.rho.size
+
+        if normalize:
+            kernel = kernel / np.linalg.norm(kernel)
+        kernel = kernel.reshape(-1, 1)
+        
+        grid = G.grid(*grid_args, **grid_kwargs)
+        
+        A = np.concatenate(
+            [
+                self.rho(g) @ kernel
+                for g in grid
+            ], axis=1
+        ).T
+
+        if out_irreps is not None:
+
+            _missing_input_irreps = list(set(irreps).difference(set(out_irreps)))
+            rho_out_extended = G.spectral_regular_representation(*out_irreps, *_missing_input_irreps, name=None)
+            kernel_out = _build_kernel(G, out_irreps + _missing_input_irreps)
+            assert kernel_out.shape[0] == rho_out_extended.size
+
+            if normalize:
+                kernel_out = kernel_out / np.linalg.norm(kernel_out)
+            kernel_out = kernel_out.reshape(-1, 1)
+
+            A_out = np.concatenate(
+                [
+                    rho_out_extended(g) @ kernel_out
+                    for g in grid
+                ], axis=1
+            ).T
+        else:
+            A_out = A
+            _missing_input_irreps = []
+            rho_out_extended = self.rho_out
+
+        eps = 1e-8
+        Ainv = np.linalg.inv(A_out.T @ A_out + eps * np.eye(rho_out_extended.size)) @ A_out.T
+
+        if out_irreps is not None:
+            Ainv = Ainv[:self.rho_out.size, :]
+
+        self.register_buffer('A', torch.tensor(A, dtype=torch.get_default_dtype()))
+        self.register_buffer('Ainv', torch.tensor(Ainv, dtype=torch.get_default_dtype()))
+        
+    def forward(self, input: GeometricTensor) -> GeometricTensor:
+        r"""
+
+        Applies the pointwise activation function on the input fields
+
+        Args:
+            input (GeometricTensor): the input feature map
+
+        Returns:
+            the resulting feature map after the non-linearities have been applied
+
+        """
+
+        assert input.type == self.in_type
+        
+        shape = input.shape
+        x_hat = input.tensor.view(shape[0], len(self.in_type), self.rho.size, *shape[2:])
+        
+        x = torch.einsum('bcf...,gf->bcg...', x_hat, self.A)
+        
+        y = self._function(x)
+
+        y_hat = torch.einsum('bcg...,fg->bcf...', y, self.Ainv)
+
+        y_hat = y_hat.reshape(shape[0], self.out_type.size, *shape[2:])
+
+        return GeometricTensor(y_hat, self.out_type, input.coords)
+
+    def evaluate_output_shape(self, input_shape: Tuple[int, ...]) -> Tuple[int, ...]:
+
+        assert len(input_shape) >= 2
+        assert input_shape[1] == self.in_type.size
+
+        b, c = input_shape[:2]
+        spatial_shape = input_shape[2:]
+
+        return (b, self.out_type.size, *spatial_shape)
+
+    def check_equivariance(self, atol: float = 1e-5, rtol: float = 2e-2, assert_raise: bool = True) -> List[Tuple[Any, float]]:
+    
+        c = self.in_type.size
+        B = 128
+        x = torch.randn(B, c, *[3]*self.space.dimensionality)
+
+        # since we mostly use non-linearities like relu or eu,l we make sure the average value of the features is
+        # positive, such that, when we test inputs with only frequency 0 (or only low frequencies), the output is not
+        # zero everywhere
+        x = x.view(B, len(self.in_type), self.rho.size, *[3]*self.space.dimensionality)
+        p = 0
+        for irr in self.rho.irreps:
+            irr = self.space.irrep(*irr)
+            if irr.is_trivial():
+                x[:, :, p] = x[:, :, p].abs()
+            p+=irr.size
+
+        x = x.view(B, self.in_type.size, *[3]*self.space.dimensionality)
+
+        errors = []
+
+        # for el in self.space.testing_elements:
+        for _ in range(100):
+            
+            el = self.space.fibergroup.sample()
+    
+            x1 = GeometricTensor(x.clone(), self.in_type)
+            x2 = GeometricTensor(x.clone(), self.in_type).transform_fibers(el)
+
+            out1 = self(x1).transform_fibers(el)
+            out2 = self(x2)
+
+            out1 = out1.tensor.view(B, len(self.out_type), self.rho_out.size, *out1.shape[2:]).detach().numpy()
+            out2 = out2.tensor.view(B, len(self.out_type), self.rho_out.size, *out2.shape[2:]).detach().numpy()
+
+            errs = np.linalg.norm(out1 - out2, axis=2).reshape(-1)
+            errs[errs < atol] = 0.
+            norm = np.sqrt(np.linalg.norm(out1, axis=2).reshape(-1) * np.linalg.norm(out2, axis=2).reshape(-1))
+            
+            relerr = errs / norm
+
+            # print(el, errs.max(), errs.mean(), relerr.max(), relerr.min())
+
+            if assert_raise:
+                assert relerr.mean()+ relerr.std() < rtol, \
+                    'The error found during equivariance check with element "{}" is too high: max = {}, mean = {}, std ={}' \
+                        .format(el, relerr.max(), relerr.mean(), relerr.std())
+
+            # errors.append((el, errs.mean()))
+            errors.append(relerr)
+
+        # return errors
+        return np.concatenate(errors).reshape(-1)
+    
+
+
+class NormNonlinearityWithBN(EquivariantModule):
+    
+    def __init__(self, in_type: FieldType, function: str = 'n_relu', bias: bool = True):
+        r"""
+        
+        Norm non-linearities.
+        This module applies a bias and an activation function over the norm of each field.
+        
+        The input representation of the fields is preserved by this operation.
+        
+        .. note ::
+            If 'squash' non-linearity (`function`) is chosen, no bias is allowed
+        
+        Args:
+            in_type (FieldType): the input field type
+            function (str, optional): the identifier of the non-linearity. It is used to specify which function to
+                                      apply. By default (``'n_relu'``), ReLU is used.
+            bias (bool, optional): add bias to norm of fields before computing the non-linearity. Default: ``True``
+
+        """
+
+        assert isinstance(in_type.gspace, GSpace)
+        
+        super(NormNonlinearityWithBN, self).__init__()
+
+        for r in in_type.representations:
+            assert 'norm' in r.supported_nonlinearities, \
+                'Error! Representation "{}" does not support "norm" non-linearity'.format(r.name)
+
+        self.space = in_type.gspace
+        self.in_type = in_type
+        self.out_type = in_type
+        
+        self._nfields = None
+        self.log_bias = None
+
+        if function == 'n_relu':
+            self._function = torch.relu
+        elif function == 'n_sigmoid':
+            self._function = torch.sigmoid
+        elif function == 'n_softplus':
+            self._function = torch.nn.functional.softplus
+        elif function == "squash":
+            self._function = lambda t: t / (1.0 + t)
+            assert bias is False, 'Error! When using squash non-linearity, norm bias is not allowed'
+        else:
+            raise ValueError('Function "{}" not recognized!'.format(function))
+        
+        # group fields by their size and
+        #   - check if fields of the same size are contiguous
+        #   - retrieve the indices of the fields
+
+        # number of fields of each size
+        self._nfields = defaultdict(int)
+        
+        # indices of the channales corresponding to fields belonging to each group
+        _indices = defaultdict(lambda: [])
+        
+        # whether each group of fields is contiguous or not
+        self._contiguous = {}
+        
+        position = 0
+        last_size = None
+        for i, r in enumerate(self.in_type.representations):
+            
+            if r.size != last_size:
+                if not r.size in self._contiguous:
+                    self._contiguous[r.size] = True
+                else:
+                    self._contiguous[r.size] = False
+            last_size = r.size
+            
+            _indices[r.size] += list(range(position, position + r.size))
+            self._nfields[r.size] += 1
+            position += r.size
+        
+        for s, contiguous in self._contiguous.items():
+            if contiguous:
+                # for contiguous fields, only the first and last indices are kept
+                _indices[s] = torch.LongTensor([min(_indices[s]), max(_indices[s])+1])
+            else:
+                # otherwise, transform the list of indices into a tensor
+                _indices[s] = torch.LongTensor(_indices[s])
+                
+            # register the indices tensors as parameters of this module
+            self.register_buffer('indices_{}'.format(s), _indices[s])
+        
+        if bias:
+            # build a bias for each field
+            self.log_bias = Parameter(torch.zeros(1, len(self.in_type), 1, 1, dtype=torch.float), requires_grad=True)
+        else:
+            self.log_bias = None
+    
+        # build a sorted list of the fields groups, such that every time they are iterated through in the same order
+        self._order = sorted(self._contiguous.keys())
+        
+        self.eps = Parameter(torch.tensor(1e-10), requires_grad=False)
+
+        for r in in_type.representations:
+            assert 'norm' in r.supported_nonlinearities, \
+                'Error! Representation "{}" does not support "norm" non-linearity'.format(r.name)
+            # Norm batch-normalization assumes the fields to have mean 0. This is true as long as it doesn't contain
+            # the trivial representation
+            for irr in r.irreps:
+                assert not in_type.fibergroup._irreps[irr].is_trivial(), f"Input type contains trivial representation '{irr}'"
+
+        self.space = in_type.gspace
+        self.in_type = in_type
+        self.out_type = in_type
+        
+        self.affine = affine
+        
+        # group fields by their size and
+        #   - check if fields of the same size are contiguous
+        #   - retrieve the indices of the fields
+
+        # number of fields of each size
+        self._nfields = defaultdict(int)
+        
+        # indices of the channels corresponding to fields belonging to each group
+        _indices = defaultdict(lambda: [])
+        
+        # whether each group of fields is contiguous or not
+        self._contiguous = {}
+        
+        position = 0
+        last_size = None
+        for i, r in enumerate(self.in_type.representations):
+            
+            if r.size != last_size:
+                if not r.size in self._contiguous:
+                    self._contiguous[r.size] = True
+                else:
+                    self._contiguous[r.size] = False
+            last_size = r.size
+            
+            _indices[r.size] += list(range(position, position + r.size))
+            self._nfields[r.size] += 1
+            position += r.size
+        
+        for s, contiguous in self._contiguous.items():
+            if contiguous:
+                # for contiguous fields, only the first and last indices are kept
+                _indices[s] = torch.LongTensor([min(_indices[s]), max(_indices[s])+1])
+            else:
+                # otherwise, transform the list of indices into a tensor
+                _indices[s] = torch.LongTensor(_indices[s])
+                
+            # register the indices tensors as parameters of this module
+            self.register_buffer(f'{s}_indices', _indices[s])
+            
+            running_var = torch.ones((1, self._nfields[s], 1), dtype=torch.float)
+            self.register_buffer(f'{s}_running_var', running_var)
+            
+            if self.affine:
+                weight = Parameter(torch.ones((1, self._nfields[s], 1)), requires_grad=True)
+                self.register_parameter(f'{s}_weight', weight)
+        
+        _indices = dict(_indices)
+        
+        self._order = list(_indices.keys())
+        
+        self.register_buffer('num_batches_tracked', torch.tensor(0, dtype=torch.long))
+        
+        self.eps = eps
+        self.momentum = momentum
+
+    def reset_running_stats(self):
+        for s in self._order:
+            running_var = getattr(self, f"{s}_running_var")
+            running_var.fill_(1)
+        self.num_batches_tracked.zero_()
+
+    def reset_parameters(self):
+        self.reset_running_stats()
+        for s in self._order:
+            weight = getattr(self, f"{s}_weight")
+            weight.data.uniform_()
+    
+    def forward(self, input: GeometricTensor) -> GeometricTensor:
+        r"""
+        Apply norm non-linearities to the input feature map
+        
+        Args:
+            input (GeometricTensor): the input feature map
+
+        Returns:
+            the resulting feature map
+            
+        """
+        
+        assert input.type == self.in_type
+
+        exponential_average_factor = 0.0
+
+        if self.training:
+            self.num_batches_tracked += 1
+            if self.momentum is None:  # use cumulative moving average
+                exponential_average_factor = 1.0 / self.num_batches_tracked.item()
+            else:  # use exponential moving average
+                exponential_average_factor = self.momentum
+
+        # compute the squares of the values of each channel
+        # n = torch.mul(input.tensor, input.tensor)
+        n = input.tensor.detach()**2
+
+        b, c = input.tensor.shape[:2]
+        shape = input.tensor.shape[2:]
+
+        output = input.tensor.clone()
+        
+        if self.training:
+            
+            # self.running_var *= 1 - exponential_average_factor
+            
+            next_var = 0
+            # iterate through all field sizes
+            for s in self._order:
+                indices = getattr(self, f"{s}_indices")
+                running_var = getattr(self, f"{s}_running_var")
+                
+                # compute the norm squared of the fields
+                
+                if self._contiguous[s]:
+                    # if the fields were contiguous, we can use slicing
+
+                    # compute the norm of each field by summing the squares
+                    norms = n[:, indices[0]:indices[1], ...] \
+                        .view(b, -1, s, *shape) \
+                        .sum(dim=2, keepdim=False) #.sqrt()
+                else:
+                    # otherwise we have to use indexing
+            
+                    # compute the norm of each field by summing the squares
+                    norms = n[:, indices, ...] \
+                        .view(b, -1, s, *shape) \
+                        .sum(dim=2, keepdim=False) #.sqrt()
+                
+                # Since the mean of the fields is 0, we can compute the variance as the mean of the norms squared
+                # corrected with Bessel's correction
+                norms = norms.transpose(0, 1).reshape(self._nfields[s], -1)
+                correction = norms.shape[1]/(norms.shape[1]-1) if norms.shape[1] > 1 else 1
+                vars = norms.mean(dim=1).view(1, -1, 1) / s
+                vars *= correction
+                # vars = norms.transpose(0, 1).reshape(self._nfields[s], -1).var(dim=1)
+        
+                # self.running_var[next_var:next_var + self._nfields[s]] += exponential_average_factor * vars
+                running_var *= 1 - exponential_average_factor
+                running_var += exponential_average_factor * vars #.detach()
+
+                next_var += self._nfields[s]
+
+            # self.running_var = self.running_var.detach()
+            
+        next_var = 0
+        
+        # iterate through all field sizes
+        for s in self._order:
+    
+            indices = getattr(self, f"{s}_indices")
+            
+            # retrieve the running variances corresponding to the current fields
+            # vars = self.running_var[next_var:next_var + self._nfields[s]].view(1, -1, 1, 1, 1)
+            # weight = self.weight[next_var:next_var + self._nfields[s]].view(1, -1, 1, 1, 1)
+            vars = getattr(self, f"{s}_running_var")
+            
+            if self.affine:
+                weight = getattr(self, f"{s}_weight")
+            else:
+                weight = 1.
+            
+            # compute the scalar multipliers needed
+            multipliers = weight / (vars + self.eps).sqrt()
+            
+            # expand the multipliers tensor to all channels for each field
+            multipliers = multipliers.expand(b, -1, s).reshape(b, -1, *[1]*len(shape))
+            
+            if self._contiguous[s]:
+                # if the fields are contiguous, we can use slicing
+                output[:, indices[0]:indices[1], ...] *= multipliers
+            else:
+                # otherwise we have to use indexing
+                output[:, indices, ...] *= multipliers
+            
+            # shift the position on the running_var and weight tensors
+            next_var += self._nfields[s]
+        
+        # wrap the result in a GeometricTensor
+        return GeometricTensor(output, self.out_type, input.coords)
+
+    def evaluate_output_shape(self, input_shape: Tuple[int, ...]) -> Tuple[int, ...]:
+
+        assert len(input_shape) >= 2
+        assert input_shape[1] == self.in_type.size
+
+        b, c = input_shape[:2]
+        spatial_shape = input_shape[2:]
+
+        return (b, self.out_type.size, *spatial_shape)
+
+    def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-5) -> List[Tuple[Any, float]]:
+        # return super(NormBatchNorm, self).check_equivariance(atol=atol, rtol=rtol)
+        pass
+
+    
+    def forward(self, input: GeometricTensor) -> GeometricTensor:
+        r"""
+        Apply norm non-linearities to the input feature map
+        
+        Args:
+            input (GeometricTensor): the input feature map
+
+        Returns:
+            the resulting feature map
+            
+        """
+        
+        assert input.type == self.in_type
+
+        coords = input.coords
+        input = input.tensor
+        
+        # scalar multipliers needed to turn the old norms into the newly computed ones
+        multipliers = torch.empty_like(input)
+
+        b, c = input.shape[:2]
+        spatial_dims = input.shape[2:]
+
+        next_bias = 0
+        
+        if self.log_bias is not None:
+            # build the bias
+            # biases = torch.nn.functional.elu(self.log_bias)
+            biases = torch.exp(self.log_bias)
+            # biases = torch.nn.functional.elu(self.log_bias) + 1
+        else:
+            biases = None
+        
+        # iterate through all field sizes
+        for s in self._order:
+            
+            # retrieve the corresponding fiber indices
+            indices = getattr(self, f"indices_{s}")
+            
+            if self._contiguous[s]:
+                # if the fields were contiguous, we can use slicing
+                # retrieve the fields
+                fm = input[:, indices[0]:indices[1], ...]
+            else:
+                # otherwise we have to use indexing
+                # retrieve the fields
+                fm = input[:, indices, ...]
+
+            # compute the norm of each field
+            norms = fm.view(b, -1, s, *spatial_dims).norm(dim=2, keepdim=True)
+            
+            # compute the new norms
+            if biases is not None:
+                # retrieve the bias elements corresponding to the current fields
+                bias = biases[:, next_bias:next_bias + self._nfields[s], ...].view(1, -1, 1, *[1]*len(spatial_dims))
+                new_norms = self._function(norms - bias)
+            else:
+                new_norms = self._function(norms)
+
+            # compute the scalar multipliers needed to turn the old norms into the newly computed ones
+            # m = torch.zeros_like(new_norms)
+            # in order to avoid division by 0
+            # mask = norms > 0.
+            # m[mask] = new_norms[mask] / norms[mask]
+            
+            m = new_norms / torch.max(norms, self.eps)
+            m[norms <= self.eps] = 0.
+
+            if self._contiguous[s]:
+                # expand the multipliers tensor to all channels for each field
+                multipliers[:, indices[0]:indices[1], ...] = m.expand(b, -1, s, *spatial_dims).reshape(b, -1, *spatial_dims)
+            
+            else:
+                # expand the multipliers tensor to all channels for each field
+                multipliers[:, indices, ...] = m.expand(b, -1, s, *spatial_dims).reshape(b, -1, *spatial_dims)
+            
+            # shift the position on the bias tensor
+            next_bias += self._nfields[s]
+        
+        # multiply the input by the multipliers computed and wrap the result in a GeometricTensor
+        return GeometricTensor(input * multipliers, self.out_type, coords)
+
+    def evaluate_output_shape(self, input_shape: Tuple[int, ...]) -> Tuple[int, ...]:
+
+        assert len(input_shape) >= 2
+        assert input_shape[1] == self.in_type.size
+
+        b, c = input_shape[:2]
+        spatial_shape = input_shape[2:]
+
+        return (b, self.out_type.size, *spatial_shape)
+
+    def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-5) -> List[Tuple[Any, float]]:
+    
+        c = self.in_type.size
+    
+        x = torch.randn(3, c, 10, 10)
+    
+        x = GeometricTensor(x, self.in_type)
+    
+        errors = []
+    
+        for el in self.space.testing_elements:
+            out1 = self(x).transform_fibers(el)
+            out2 = self(x.transform_fibers(el))
+        
+            errs = (out1.tensor - out2.tensor).detach().numpy()
+            errs = np.abs(errs).reshape(-1)
+            print(el, errs.max(), errs.mean(), errs.var())
+        
+            assert torch.allclose(out1.tensor, out2.tensor, atol=atol, rtol=rtol), \
+                'The error found during equivariance check with element "{}" is too high: max = {}, mean = {} var ={}' \
+                    .format(el, errs.max(), errs.mean(), errs.var())
+        
+            errors.append((el, errs.mean()))
+    
+        return errors

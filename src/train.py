@@ -1,5 +1,7 @@
 import os
-from typing import List
+import shutil
+from datetime import datetime
+from pathlib import Path
 
 import random
 import numpy as np
@@ -14,7 +16,7 @@ from lightning.pytorch.loggers import WandbLogger
 
 import wandb
 from nets.RnNet import R2Net
-from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, MnistRotDataset
+from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, EuroSATDataModule
 import argparse
 import nets.equivariance_metric as em
 
@@ -57,7 +59,9 @@ class LitHnn(L.LightningModule):
                  mnist=False,
                  invar_error_logging=True,
                  invar_check_every_n_epochs=1,
-                 invar_chunk_size=4
+                 invar_chunk_size=4,
+                 num_of_batches_to_use_for_invar_logging=16,
+                 num_of_angles=32
                  ):
         super().__init__()
 
@@ -92,10 +96,11 @@ class LitHnn(L.LightningModule):
         self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
         self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
 
-        self.eq_num_angles = 16
+        self.eq_num_angles = num_of_angles
         self.invar_error_logging = invar_error_logging
         self.invar_check_every_n_epochs = max(1, int(invar_check_every_n_epochs))
         self.invar_chunk_size = max(1, int(invar_chunk_size))
+        self.num_of_batches_to_use_for_invar_logging = max(1, int(num_of_batches_to_use_for_invar_logging))
 
     def _should_log_invar(self, stage: str, batch_idx: int) -> bool:
         if not self.invar_error_logging:
@@ -115,12 +120,13 @@ class LitHnn(L.LightningModule):
             if num_batches <= 0:
                 return False
             if getattr(self, "_val_eq_epoch", None) != self.current_epoch:
-                k = min(16, num_batches)
+                k = min(self.num_of_batches_to_use_for_invar_logging, num_batches)
                 self._val_eq_epoch = self.current_epoch
                 self._val_eq_batches = set(random.sample(range(num_batches), k))
             if batch_idx not in getattr(self, "_val_eq_batches", set()):
                 return False
         elif stage == "test":
+            
             return True
         else:
             return False
@@ -134,7 +140,7 @@ class LitHnn(L.LightningModule):
                 num_samples=self.eq_num_angles,
                 chunk_size=self.invar_chunk_size,
             )
-        return float(curve.mean())
+        return curve
 
     def on_fit_start(self):
         # count all trainable parameters
@@ -173,7 +179,7 @@ class LitHnn(L.LightningModule):
         self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         if self._should_log_invar(stage="val", batch_idx=batch_idx):
             x, _ = batch
-            eq_mean = self._compute_equivariant_error(x)
+            eq_mean = self._compute_equivariant_error(x).mean()
             self.log('val_equi_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
@@ -183,7 +189,8 @@ class LitHnn(L.LightningModule):
         self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         if self._should_log_invar(stage="test", batch_idx=batch_idx):
             x, _ = batch
-            eq_mean = self._compute_equivariant_error(x)
+            eq_curve = self._compute_equivariant_error(x)
+            eq_mean = eq_curve.mean()
             self.log('test_equi_error', eq_mean, prog_bar=False, on_epoch=True, sync_dist=True)
         return loss
 
@@ -204,9 +211,35 @@ class LitHnn(L.LightningModule):
         }
 
 
+def _sanitize_component(value) -> str:
+    component = str(value)
+    sanitized = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in component)
+    sanitized = sanitized.strip("-_")
+    return sanitized or "value"
+
+
+def _copy_model_checkpoint(ckpt_path: str, export_dir: str, subdir: str, name_parts) -> str:
+    if not ckpt_path:
+        return ""
+
+    export_dir_path = Path(export_dir) / subdir
+    export_dir_path.mkdir(parents=True, exist_ok=True)
+
+    base_name = "_".join(
+        _sanitize_component(part) for part in name_parts if part not in (None, "")
+    )
+    if not base_name:
+        base_name = f"model_{subdir}"
+
+    dest_ckpt = export_dir_path / f"{base_name}.ckpt"
+    shutil.copy2(ckpt_path, dest_ckpt)
+    return str(dest_ckpt)
+
+
 
 def _train_impl(config):
     print("Config:", config)
+    default_subdir = datetime.utcnow().strftime("%Y%m%d")
     seed = getattr(config, "seed", 0)
     random.seed(seed)
     np.random.seed(seed)
@@ -216,10 +249,17 @@ def _train_impl(config):
     logger = WandbLogger(name=config.project, project=config.project)
 
     dataset = getattr(config, "dataset", "None")
+    train_subset_fraction = getattr(config, "train_subset_fraction", 1.0)
+    model_export_dir = getattr(config, "model_export_dir", "saved_models")
+    model_export_subdir = getattr(config, "model_export_subdir", default_subdir)
+    model_export_subdir = _sanitize_component(model_export_subdir)
+    if not model_export_subdir:
+        model_export_subdir = default_subdir
     mnist=False
     if dataset == "mnist_rot":
         datamodule = MnistRotDataModule(batch_size=config.batch_size, 
-                                        data_dir="./src/datasets_utils/mnist_rotation_new")
+                                        data_dir="./src/datasets_utils/mnist_rotation_new", 
+                                        img_size=getattr(config, "img_size", 29))
         grey_scale = True
         mnist=True
     elif dataset == "resisc45":
@@ -228,16 +268,37 @@ def _train_impl(config):
         grey_scale = False
     elif dataset == "colorectal_hist":
         datamodule = ColorectalHistDataModule(batch_size=config.batch_size,
-                                              img_size=getattr(config, "img_size", 150))
+                                              img_size=getattr(config, "img_size", 150),
+                                              train_fraction=train_subset_fraction)
+        grey_scale = False
+    elif dataset == "eurosat":
+        datamodule = EuroSATDataModule(batch_size=config.batch_size,
+                                       img_size=getattr(config, "img_size", 64),
+                                       seed=seed,
+                                       train_fraction=train_subset_fraction)
         grey_scale = False
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
     n_classes_dm = datamodule.num_classes
-
+    img_size = datamodule.img_size
+    wandb.config.update({
+        "img_size": img_size
+    }, allow_val_change=True)
     # Log choices
     wandb.config.update({
         "dataset": dataset
+    }, allow_val_change=True)
+    if dataset == "eurosat":
+        wandb.config.update({
+            "train_subset_fraction": train_subset_fraction
+        }, allow_val_change=True)
+    wandb.config.update({
+        "activation_type": getattr(config, "activation_type", None),
+        "normalization": getattr(config, "bn", None),
+        "seed": seed,
+        "model_export_dir": model_export_dir,
+        "model_export_subdir": model_export_subdir,
     }, allow_val_change=True)
     channels_per_block_updated = [int(c * config.channels_multiplier) for c in config.channels_per_block]
     wandb.config.update({
@@ -279,11 +340,13 @@ def _train_impl(config):
         exp_dump=config.exp_dump,
         
         grey_scale=grey_scale,
-        img_size=config.img_size,
+        img_size=img_size,
         mnist=mnist,
         invar_error_logging=config.invar_error_logging,
         invar_check_every_n_epochs=invar_check_every,
-        invar_chunk_size=invar_chunk_size
+        invar_chunk_size=invar_chunk_size,
+        num_of_batches_to_use_for_invar_logging=config.num_of_batches_to_use_for_invar_logging,
+        num_of_angles=config.num_of_angles,
     )
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
@@ -313,12 +376,25 @@ def _train_impl(config):
         test_metrics = trainer.test(model=None, datamodule=datamodule)
 
     tm = test_metrics[0] if isinstance(test_metrics, list) and len(test_metrics) else {}
+    test_acc = float(tm.get("test_acc", float("nan")))
+    test_loss = float(tm.get("test_loss", float("nan")))
+
+    exported_ckpt = ""
+    if best_ckpt_path:
+        name_parts = [
+            dataset,
+            getattr(config, "activation_type", None),
+            getattr(config, "bn", None),
+            f"seed{seed}",
+        ]
+        exported_ckpt = _copy_model_checkpoint(best_ckpt_path, model_export_dir, model_export_subdir, name_parts)
 
     return {
         "best_val_loss": best_val_loss,
         "best_ckpt": best_ckpt_path,
-        "test_acc": float(tm.get("test_acc", float("nan"))),
-        "test_loss": float(tm.get("test_loss", float("nan")))
+        "test_acc": test_acc,
+        "test_loss": test_loss,
+        "exported_ckpt": exported_ckpt,
     }
 
 
@@ -338,7 +414,7 @@ if __name__ == "__main__":
     parser.add_argument("--project", type=str, default="research_task_hws")
     parser.add_argument("--name", type=str, default="HNet_experiment")
     parser.add_argument("--dataset", type=str, default="mnist_rot",
-                        choices=["mnist_rot", "resisc45", "colorectal_hist"])
+                        choices=["mnist_rot", "resisc45", "colorectal_hist", "eurosat"])
     parser.add_argument("--flip", type=bool, default=False, help="for O2")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=16)
@@ -352,7 +428,7 @@ if __name__ == "__main__":
     parser.add_argument("--channels_multiplier", type=float, default=1.0)
     parser.add_argument("--conv_sigma", type=float, default=0.6)
     parser.add_argument("--pool_after_every_n_blocks", default=2)
-    parser.add_argument("--activation_type", default="gated_sigmoid", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu_16", "fourier_elu_16", "fourier_relu_8", "fourier_elu_8", "fourier_relu_32", "fourier_elu_32", "fourier_relu_4", "fourier_elu_4"])
+    parser.add_argument("--activation_type", default="gated_shared_sigmoid", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu_16", "fourier_elu_16", "fourier_relu_8", "fourier_elu_8", "fourier_relu_32", "fourier_elu_32", "fourier_relu_4", "fourier_elu_4"])
     parser.add_argument("--pool_size", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=0.66)
     parser.add_argument("--invar_type", type=str, default='norm', choices=['conv2triv', 'norm'])
@@ -369,6 +445,20 @@ if __name__ == "__main__":
                         help="How often (in epochs) to run the invariance metric during validation.")
     parser.add_argument("--invar_chunk_size", type=int, default=4,
                         help="Number of rotated batches evaluated together when computing invariance error.")
+    parser.add_argument("--num_of_batches_to_use_for_invar_logging", type=int, default=4,
+                        help="Number of batches to use for invariance logging.")
+    
+    parser.add_argument("--num_of_angles", type=int, default=32,
+                        help="Number of rotation angles to use when computing equivariance error.")
+    
+    parser.add_argument("--train_subset_fraction", type=float, default=1.0,
+                        help="Fraction of the EuroSAT train split to use (0, 1].")
+
+    parser.add_argument("--model_export_dir", type=str, default="saved_models",
+                        help="Directory where the selected checkpoints will be copied for later analysis.")
+    parser.add_argument("--model_export_subdir", type=str, default="",
+                        help="Optional name of a sub-folder under model_export_dir shared across runs (defaults to current date).")
+                        
     args = parser.parse_args()
 
     config = vars(args)

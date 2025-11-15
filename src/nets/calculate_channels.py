@@ -1,5 +1,5 @@
 import numpy as np
-from escnn.nn import FieldType, R2Conv
+from escnn.nn import FieldType, R2Conv, R3Conv
 from escnn.gspaces import rot2dOnR2, flipRot2dOnR2
 def adjust_channels(
     C: int,
@@ -10,8 +10,7 @@ def adjust_channels(
     layer_index: int = 1,
     last_layer: bool = False,
     mnist: bool = True,
-
-) -> int:
+    volumetric:bool = False) -> int:
     """
     Compute the channel count to use given input channels C, the group (gspace),
     and the architectural knobs, mirroring the scaling in your snippet.
@@ -38,6 +37,13 @@ def adjust_channels(
             continue
         mult = int(irr.size // irr.sum_of_squares_constituents)
         irreps.extend([irr] * mult)
+    ref_group = rot2dOnR2(maximum_frequency=max_frequency)
+    irreps_ref = []
+    for irr in ref_group.irreps:
+        if irr.is_trivial():
+            continue
+        mult = int(irr.size // irr.sum_of_squares_constituents)
+        irreps_ref.extend([irr] * mult)
     # ---- invariant map case: keep number of *output* channels constant across groups ----
     if last_layer:
         size = 0
@@ -48,23 +54,27 @@ def adjust_channels(
     # ---- parameter-fix case: keep params roughly constant by compensating kernel basis dimension ----
     if layer_index > 1:
         # r_in and r_out are [trivial] + irreps
-        r_in_ref  = FieldType(group, [group.trivial_repr] + list(irreps))
-        r_out_ref = FieldType(group, [group.trivial_repr] + list(irreps))
+        r_in_ref  = FieldType(ref_group, [ref_group.trivial_repr] + list(irreps_ref))
+        r_out_ref = FieldType(ref_group, [ref_group.trivial_repr] + list(irreps_ref))
         if activation_type in ['fourier_relu', 'fourier_elu', 'norm_relu', 'norm_squash']:
-            r_in  = r_in_ref
-            r_out = r_out_ref
+            r_in = FieldType(group, [group.trivial_repr]  + irreps)
+            r_out = FieldType(group, [group.trivial_repr] + irreps)
         elif activation_type in ['gated_shared_sigmoid']:
             r_in = FieldType(group, [group.trivial_repr] * 2 + irreps)
             r_out = FieldType(group, [group.trivial_repr] + irreps)
         elif activation_type in ['gated_sigmoid']:
             I = len(irreps)
-            S = FieldType(group, irreps).size + 1
-            M = S + I
+
             r_in = FieldType(group, [group.trivial_repr] * (I + 1) + irreps)
             r_out = FieldType(group, [group.trivial_repr] + irreps)
-        tmp = R2Conv(
-            r_in, r_out, kernel_size,sigma=0.6
-        )
+        if volumetric:
+            tmp = R3Conv(
+                r_in, r_out, kernel_size,sigma=0.6
+            )
+        else:
+            tmp = R2Conv(
+                r_in, r_out, kernel_size,sigma=0.6
+            )
         # basis dimension of constrained kernel space
         t = float(tmp.basisexpansion.dimension())
         print(f"t: {t}")
@@ -74,7 +84,10 @@ def adjust_channels(
         if mnist:
             denom = 16.0 * (kernel_size ** 2) * 3.0 / 4.0 # this is from E2 paper, wrt to the 16GCNN
         else:
-            tmp_2 = R2Conv(r_in_ref, r_out_ref, kernel_size,sigma=0.6) # this is the reference conv to keep params constant wrt to the fourier/norm activations
+            if volumetric:
+                tmp_2 = R3Conv(r_in_ref, r_out_ref, kernel_size,sigma=0.6) # this is the reference conv to keep params constant wrt to the fourier/norm activations
+            else:
+                tmp_2 = R2Conv(r_in_ref, r_out_ref, kernel_size,sigma=0.6) # this is the reference conv to keep params constant wrt to the fourier/norm activations
             denom = float(tmp_2.basisexpansion.dimension()) # num of params for the reference conv
         t /= denom if denom > 0 else 1.0 # relative number of params
 
