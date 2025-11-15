@@ -255,6 +255,7 @@ def _train_impl(config):
     model_export_subdir = _sanitize_component(model_export_subdir)
     if not model_export_subdir:
         model_export_subdir = default_subdir
+    flip_flag = bool(getattr(config, "flip", False))
     mnist=False
     if dataset == "mnist_rot":
         datamodule = MnistRotDataModule(batch_size=config.batch_size, 
@@ -360,7 +361,7 @@ def _train_impl(config):
         callbacks=[early, chkpt, lr_monitor],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        strategy="ddp" if torch.cuda.device_count() > 1 else "auto",
+        strategy="auto",
         precision=config.precision,
         deterministic=False,
         benchmark=False,
@@ -385,6 +386,7 @@ def _train_impl(config):
             dataset,
             getattr(config, "activation_type", None),
             getattr(config, "bn", None),
+            "flip" if flip_flag else None,
             f"seed{seed}",
         ]
         exported_ckpt = _copy_model_checkpoint(best_ckpt_path, model_export_dir, model_export_subdir, name_parts)
@@ -439,7 +441,7 @@ if __name__ == "__main__":
     parser.add_argument("--img_size", type=int, default=150)
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--invar_error_logging", type=bool, default=True , help="Disable invariance error logging to speed up training")
+    parser.add_argument("--invar_error_logging", type=bool, default=False , help="Disable invariance error logging to speed up training")
     parser.add_argument("--precision", type=str, default="32-true", choices=["16-mixed", "32-true"])
     parser.add_argument("--invar_check_every_n_epochs", type=int, default=1,
                         help="How often (in epochs) to run the invariance metric during validation.")

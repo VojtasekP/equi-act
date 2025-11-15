@@ -11,7 +11,9 @@ equivariance curve, averages the results, and stores one plot named
 from __future__ import annotations
 
 import argparse
+import itertools
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
@@ -96,6 +98,12 @@ def _parse_args() -> argparse.Namespace:
         default="./src/datasets_utils/mnist_rotation_new",
         help="Path to MNIST-rot dataset (used only for mnist_rot checkpoints).",
     )
+    parser.add_argument(
+        "--layer",
+        type=int,
+        default=0,
+        help="If > 0, evaluate equivariance at the specified layer index instead of the full model.",
+    )
     return parser.parse_args()
 
 
@@ -137,6 +145,12 @@ def _parse_checkpoint_filename(stem: str) -> Dict:
     if not rest:
         raise ValueError("activation/bn part missing")
 
+    flip_hint = False
+    if rest.endswith("_flip"):
+        flip_hint = True
+        rest = rest[: -len("_flip")]
+        rest = rest.rstrip("_")
+
     normalization = None
     activation = None
     for bn in _BN_NAMES:
@@ -160,6 +174,7 @@ def _parse_checkpoint_filename(stem: str) -> Dict:
         "dataset": dataset,
         "activation_hint": activation,
         "normalization_hint": normalization,
+        "flip_hint": flip_hint,
         "seed": seed,
     }
 
@@ -177,7 +192,7 @@ def _collect_checkpoints(models_dir: Path) -> List[Dict]:
     return entries
 
 
-def _build_datamodule(dataset: str, hparams, args: argparse.Namespace, seed_override: int) -> torch.nn.Module:
+def _build_datamodule(dataset: str, hparams, args: SimpleNamespace, seed_override: int) -> torch.nn.Module:
     img_size = int(_get_hparam(hparams, "img_size", 64))
     seed = int(seed_override)
     batch_size = args.eval_batch_size
@@ -203,6 +218,8 @@ def _compute_curve(
     num_angles: int,
     chunk_size: int,
     max_batches: int,
+    *,
+    layer: int | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     if hasattr(datamodule, "prepare_data"):
         try:
@@ -230,17 +247,54 @@ def _compute_curve(
                 lit_model.model,
                 num_samples=num_angles,
                 chunk_size=chunk_size,
+                layer=layer,
             )
         if theta_template is None:
             theta_template = np.array(thetas, dtype=np.float64)
         curves.append(np.array(curve, dtype=np.float64))
         if max_batches > 0 and (batch_idx + 1) >= max_batches:
             break
-
+    print(f"Processed {len(curves)} batches for equivariance curve.")
     if not curves or theta_template is None:
         raise RuntimeError("No batches were processed; increase --max-eval-batches?")
 
     return theta_template, np.stack(curves, axis=0).mean(axis=0)
+
+
+def _wrap_segment(theta_segment: np.ndarray, values: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    if theta_segment.size == 0 or values.size == 0:
+        return theta_segment, values
+    if np.isclose(theta_segment[0], theta_segment[-1]):
+        return theta_segment, values
+    theta_wrapped = np.concatenate([theta_segment, theta_segment[:1] + 2 * np.pi])
+    values_wrapped = np.concatenate([values, values[:1]])
+    return theta_wrapped, values_wrapped
+
+
+def _build_plot_segments(
+    theta_rad: np.ndarray,
+    values: np.ndarray,
+    flip: bool,
+    base_angles: int,
+) -> List[Tuple[np.ndarray, np.ndarray, str]]:
+    if not flip:
+        segments = [("rot", theta_rad, values, 0.0)]
+    else:
+        base = max(1, int(base_angles))
+        total_needed = base * 2
+        if theta_rad.shape[0] < total_needed or values.shape[0] < total_needed:
+            raise ValueError("Not enough samples for flip/grouped segments.")
+        segments = [
+            ("rot", theta_rad[:base], values[:base], 0.0),
+            ("flip", theta_rad[base:base * 2], values[base:base * 2], 2.0),
+        ]
+
+    plot_segments: List[Tuple[np.ndarray, np.ndarray, str]] = []
+    for seg_type, theta_seg, val_seg, offset in segments:
+        theta_wrap, val_wrap = _wrap_segment(theta_seg, val_seg)
+        theta_plot = theta_wrap / np.pi + offset
+        plot_segments.append((theta_plot, val_wrap, seg_type))
+    return plot_segments
 
 
 def _save_plot(
@@ -251,24 +305,67 @@ def _save_plot(
     dataset: str,
     activation: str,
     normalization: str,
+    layer_label: str,
+    flip: bool,
+    base_angles: int,
 ) -> None:
-    theta_deg = np.rad2deg(theta_rad)
+    mean_segments = _build_plot_segments(theta_rad, mean_curve, flip, base_angles)
+    std_segments = (
+        _build_plot_segments(theta_rad, std_curve, flip, base_angles) if std_curve is not None else None
+    )
 
-    plt.figure(figsize=(7, 4))
-    plt.plot(theta_deg, mean_curve, label="mean error", color="C0")
-    if std_curve is not None and np.any(std_curve > 0):
-        plt.fill_between(
-            theta_deg,
-            mean_curve - std_curve,
-            mean_curve + std_curve,
-            color="C0",
-            alpha=0.2,
-            label="±1 std",
-        )
-    plt.xlabel("Rotation angle (degrees)")
+    plt.figure(figsize=(8, 4))
+    color_map = {"rot": "C0", "flip": "C1"}
+    label_map = {"rot": "rotations", "flip": "flips"}
+    legend_used = {"rot_mean": False, "flip_mean": False, "rot_std": False, "flip_std": False}
+
+    for idx, (theta_vals, mean_vals, seg_type) in enumerate(mean_segments):
+        color = color_map.get(seg_type, "C0")
+        mean_label_key = f"{seg_type}_mean"
+        label = f"{label_map.get(seg_type, seg_type)} mean" if not legend_used[mean_label_key] else None
+        plt.plot(theta_vals, mean_vals, color=color, label=label)
+        legend_used[mean_label_key] = True
+
+        if std_segments is not None:
+            theta_std, std_vals, _ = std_segments[idx]
+            if theta_std.shape != theta_vals.shape:
+                raise ValueError("Theta/std segments have mismatched shapes.")
+            std_label_key = f"{seg_type}_std"
+            std_label = (
+                f"{label_map.get(seg_type, seg_type)} ±1 std"
+                if not legend_used[std_label_key]
+                else None
+            )
+            plt.fill_between(
+                theta_vals,
+                mean_vals - std_vals,
+                mean_vals + std_vals,
+                color=color,
+                alpha=0.2,
+                label=std_label,
+            )
+            legend_used[std_label_key] = True
+
+    plt.xlabel(r"Rotation angle ($\pi$ units)")
     plt.ylabel("Relative equivariance error")
-    plt.title(f"Equivariance: {dataset} | {activation} / {normalization}")
-    plt.xticks(np.linspace(0, 360, num=9))
+    plt.title(f"Equivariance ({layer_label}): {dataset} | {activation} / {normalization}")
+    span = 2 if not flip else 4
+    tick_vals = np.linspace(0, span, num=9)
+    tick_labels = []
+    for val in tick_vals:
+        if np.isclose(val, 0):
+            tick_labels.append("0")
+        elif np.isclose(val, 2) and not flip:
+            tick_labels.append("2")
+        elif np.isclose(val, 2) and flip:
+            tick_labels.append("2 | flip")
+        elif flip and np.isclose(val, 4):
+            tick_labels.append("4")
+        elif np.isclose(val, 1):
+            tick_labels.append("1")
+        else:
+            tick_labels.append(f"{val:.1f}")
+    plt.xticks(tick_vals, tick_labels)
     plt.ylim(bottom=0)
     plt.grid(True, linestyle="--", alpha=0.3)
     plt.legend()
@@ -285,6 +382,8 @@ class _CurveAccumulator:
         activation: str,
         normalization: str,
         flip: bool,
+        layer_label: str,
+        base_angles: int,
         theta_rad: np.ndarray,
         curve: np.ndarray,
     ):
@@ -292,6 +391,8 @@ class _CurveAccumulator:
         self.activation = activation
         self.normalization = normalization
         self.flip = bool(flip)
+        self.layer_label = layer_label
+        self.base_angles = max(1, int(base_angles))
         self.theta = theta_rad
         self.sum = curve.copy()
         self.sumsq = curve ** 2
@@ -304,85 +405,171 @@ class _CurveAccumulator:
         self.sumsq += curve ** 2
         self.count += 1
 
-    def finalize(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, str, str, str, bool]:
+    def finalize(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, str, str, str, bool, str, int]:
         mean = self.sum / self.count
         var = self.sumsq / self.count - mean ** 2
         var = np.clip(var, a_min=0.0, a_max=None)
         std = np.sqrt(var)
-        return self.theta, mean, std, self.dataset, self.activation, self.normalization, self.flip
+        return (
+            self.theta,
+            mean,
+            std,
+            self.dataset,
+            self.activation,
+            self.normalization,
+            self.flip,
+            self.layer_label,
+            self.base_angles,
+        )
 
 
-def _finalize_and_plot(accumulator: _CurveAccumulator, output_dir: Path):
+def _finalize_and_plot(accumulator: _CurveAccumulator, output_dir: Path) -> Path | None:
     if accumulator is None:
-        return
-    theta, mean, std, dataset, activation, normalization, flip = accumulator.finalize()
+        return None
+    theta, mean, std, dataset, activation, normalization, flip, layer_label, base_angles = (
+        accumulator.finalize()
+    )
     flip_suffix = "flip" if flip else "noflip"
-    safe_name = f"{dataset}_{activation}_{normalization}_{flip_suffix}".replace("/", "-")
+    layer_suffix = layer_label.replace(" ", "")
+    safe_name = f"{dataset}_{activation}_{normalization}_{flip_suffix}_{layer_suffix}".replace("/", "-")
     out_path = output_dir / f"{safe_name}.png"
-    _save_plot(theta, mean, std, out_path, dataset, activation, normalization)
+    _save_plot(
+        theta,
+        mean,
+        std,
+        out_path,
+        dataset,
+        activation,
+        normalization,
+        layer_label,
+        flip,
+        base_angles,
+    )
     print(f"Saved averaged plot to {out_path}")
+    return out_path
+
+
+def generate_equivariance_plots(
+    models_dir: str | Path,
+    output_dir: str | Path,
+    *,
+    num_angles: int = 32,
+    chunk_size: int = 4,
+    eval_batch_size: int = 8,
+    max_eval_batches: int = -1,
+    device: str = "auto",
+    mnist_data_dir: str = "./src/datasets_utils/mnist_rotation_new",
+    layer: int = 0,
+) -> List[Path]:
+    device_obj = _select_device(device)
+    models_dir_path = Path(models_dir)
+    if not models_dir_path.exists():
+        raise FileNotFoundError(f"Models directory '{models_dir_path}' does not exist.")
+
+    entries = _collect_checkpoints(models_dir_path)
+    if not entries:
+        print(f"No checkpoint files found in {models_dir_path}; nothing to plot.")
+        return []
+
+    entries.sort(
+        key=lambda e: (
+            e["dataset"],
+            e["activation_hint"],
+            e["normalization_hint"],
+            bool(e.get("flip_hint", False)),
+            e["seed"],
+        )
+    )
+
+    output_dir_path = Path(output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+
+    saved_plots: List[Path] = []
+    args_ns = SimpleNamespace(eval_batch_size=eval_batch_size, mnist_data_dir=mnist_data_dir)
+    layer_index = layer if layer > 0 else None
+    layer_label = f"layer {layer_index}" if layer_index else "full model"
+
+    for (dataset, act_hint, norm_hint, flip_hint), group_iter in itertools.groupby(
+        entries,
+        key=lambda e: (
+            e["dataset"],
+            e["activation_hint"],
+            e["normalization_hint"],
+            bool(e.get("flip_hint", False)),
+        ),
+    ):
+        group_entries = list(group_iter)
+        first_entry = group_entries[0]
+        print(
+            f"Processing group: dataset={dataset}, activation={act_hint}, bn={norm_hint}, flip={flip_hint}"
+        )
+
+        lit_model = LitHnn.load_from_checkpoint(first_entry["path"], map_location=device_obj)
+        activation = _get_hparam(lit_model.hparams, "activation_type", act_hint)
+        normalization = _get_hparam(lit_model.hparams, "bn", norm_hint)
+        flip_flag = bool(_get_hparam(lit_model.hparams, "flip", flip_hint))
+
+        datamodule = _build_datamodule(dataset, lit_model.hparams, args_ns, first_entry["seed"])
+        base_angles = max(1, int(num_angles))
+        samples_per_group = base_angles * (2 if flip_flag else 1)
+
+        theta_rad, curve = _compute_curve(
+            lit_model,
+            datamodule,
+            device=device_obj,
+            num_angles=samples_per_group,
+            chunk_size=chunk_size,
+            max_batches=max_eval_batches,
+            layer=layer_index,
+        )
+        accumulator = _CurveAccumulator(
+            dataset,
+            activation,
+            normalization,
+            flip_flag,
+            layer_label,
+            base_angles,
+            theta_rad,
+            curve,
+        )
+
+        for entry in group_entries[1:]:
+            checkpoint = torch.load(entry["path"], map_location=device_obj)
+            state_dict = checkpoint.get("state_dict")
+            if state_dict is None:
+                raise KeyError(f"Checkpoint {entry['path']} missing 'state_dict'")
+            lit_model.load_state_dict(state_dict)
+            theta_rad, curve = _compute_curve(
+                lit_model,
+                datamodule,
+                device=device_obj,
+                num_angles=samples_per_group,
+                chunk_size=chunk_size,
+                max_batches=max_eval_batches,
+                layer=layer_index,
+            )
+            accumulator.add(theta_rad, curve)
+
+        saved = _finalize_and_plot(accumulator, output_dir_path)
+        if saved:
+            saved_plots.append(saved)
+
+    return saved_plots
 
 
 def main() -> None:
     args = _parse_args()
-    device = _select_device(args.device)
-
-    models_dir = Path(args.models_dir)
-    if not models_dir.exists():
-        raise FileNotFoundError(f"Models directory '{models_dir}' does not exist.")
-
-    entries = _collect_checkpoints(models_dir)
-    if not entries:
-        print(f"No checkpoint files found in {models_dir}; nothing to plot.")
-        return
-
-    entries.sort(
-        key=lambda e: (e["dataset"], e["activation_hint"], e["normalization_hint"], e["seed"])
+    generate_equivariance_plots(
+        args.models_dir,
+        args.output_dir,
+        num_angles=args.num_angles,
+        chunk_size=args.chunk_size,
+        eval_batch_size=args.eval_batch_size,
+        max_eval_batches=args.max_eval_batches,
+        device=args.device,
+        mnist_data_dir=args.mnist_data_dir,
+        layer=args.layer,
     )
-
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    accumulator: _CurveAccumulator | None = None
-    current_key: Tuple[str, str, str] | None = None
-
-    for entry in entries:
-        ckpt_path = entry["path"]
-        dataset = entry["dataset"]
-        print(f"Processing {ckpt_path.name} (dataset={dataset})")
-
-        lit_model = LitHnn.load_from_checkpoint(ckpt_path, map_location=device)
-        activation = _get_hparam(
-            lit_model.hparams, "activation_type", entry["activation_hint"]
-        )
-        normalization = _get_hparam(
-            lit_model.hparams, "bn", entry["normalization_hint"]
-        )
-        flip_flag = bool(_get_hparam(lit_model.hparams, "flip", False))
-
-        datamodule = _build_datamodule(dataset, lit_model.hparams, args, entry["seed"])
-        theta_rad, curve = _compute_curve(
-            lit_model,
-            datamodule,
-            device=device,
-            num_angles=args.num_angles,
-            chunk_size=args.chunk_size,
-            max_batches=args.max_eval_batches,
-        )
-
-        key = (dataset, activation, normalization, flip_flag)
-
-        if current_key is None:
-            accumulator = _CurveAccumulator(dataset, activation, normalization, flip_flag, theta_rad, curve)
-            current_key = key
-        elif key != current_key:
-            _finalize_and_plot(accumulator, output_dir)
-            accumulator = _CurveAccumulator(dataset, activation, normalization, flip_flag, theta_rad, curve)
-            current_key = key
-        else:
-            accumulator.add(theta_rad, curve)
-
-    _finalize_and_plot(accumulator, output_dir)
 
 
 if __name__ == "__main__":

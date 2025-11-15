@@ -1,4 +1,4 @@
-program: src/SO2_Nets/train.py
+program: src/train.py
 method: grid
 project: mnist_rot
 metric:
@@ -11,14 +11,16 @@ parameters:
   dataset:
     values: ["mnist_rot"]
   activation_type:
-    values: ["fourier_elu_16"]
+    values: ["norm_relu", "fourier_elu_16", "gated_sigmoid", "gated_shared_sigmoid", "norm_squash", "fourier_elu_32"]
   bn:
-    values: ["Normbn"]
+    values: ["Normbn", "IIDbn"]
   seed:
     values: [0, 1, 2, 3, 4]            # validate best config with multiple seeds
     # values: [0, 1, 2, 3, 4,]
   max_rot_order:
-    values: [3,5,7]
+    value: 3
+  flip:
+    values: [true, false]
   channels_per_block:
     value: [16, 24, 32, 32, 48, 64]
   kernels_per_block:
@@ -42,7 +44,16 @@ parameters:
   invariant_channels:
     # value: 96
     value: 64
-
+  invar_error_logging:
+    value: false
+  invar_check_every_n_epochs:
+    value: 3
+  invar_chunk_size:
+    value: 1
+  num_of_batches_to_use_for_invar_logging:
+    value: 5
+  num_of_angles:
+    value: 8
 
   lr:
     value: 0.001
@@ -61,5 +72,10 @@ parameters:
   img_size:
     value: 29
 
+  model_export_dir:
+    value: "saved_models/"
+  model_export_subdir:
+    value: "mnist_rot_final/"
+    
 
 

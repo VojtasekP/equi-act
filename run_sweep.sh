@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_YAML="src/SO2_Nets/sweep_colorectal.yaml"
+DEFAULT_YAML="src/swesps/sweep_colorectal.yaml"
 
 usage() {
   cat <<'EOF'

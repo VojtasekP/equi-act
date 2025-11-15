@@ -1,22 +1,22 @@
 program: src/train.py
 method: grid
-project: colorectal_hist
+project: eurosat
 metric:
   name: val_loss
   goal: minimize
 
 parameters:
   project:
-    value: "colorectal_hist"
+    value: "eurosat"
   dataset:
-    values: ["colorectal_hist"]
+    values: ["eurosat"]
   activation_type:
-    values: ["gated_sigmoid", "gated_shared_sigmoid", "norm_squash"]
+    values: ["norm_relu", "fourier_elu_16", "fourier_elu_32", "gated_sigmoid", "gated_shared_sigmoid", "norm_squash"]
   bn:
     values: ["Normbn", "IIDbn"]
   seed:
-    values: [0, 1, 2, 3, 4]            # validate best config with multiple seeds
-    # values: [0, 1, 2, 3, 4,]
+    # values: [42] # ,3,4]            # validate best config with multiple seeds
+    values: [0, 1, 2, 3, 4]
   max_rot_order:
     value: 3
   flip:
@@ -50,33 +50,34 @@ parameters:
   invar_check_every_n_epochs:
     value: 3
   invar_chunk_size:
-    value: 4
+    value: 1
   num_of_batches_to_use_for_invar_logging:
     value: 5
-  train_subset_fraction:
-    value: 1
   num_of_angles:
     value: 16
+
   lr:
     value: 0.001
     
   weight_decay:
-    value: 0.001
+    value: 0
   burin_in_period:
     value: 20
   exp_dump:
-    value: 0.9
+    value: 0.85
   batch_size:
     value: 64
   epochs:
-    value: 60
+    value: 50
   patience:
     value: 60
   img_size:
-    value: 150
+    value: 64
   precision:
     value: "32-true"
+  train_subset_fraction:
+    value: 1
   model_export_dir:
     value: "saved_models/"
   model_export_subdir:
-    value: "colorectal_hist/"
+    value: "eurosat_final/"

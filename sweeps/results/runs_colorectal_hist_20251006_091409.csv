@@ -1,1 +1,0 @@
-timestamp,dataset,activation,normalization,repeat_idx,seed,epochs,batch_size,lr,weight_decay,channels_per_block,layers_per_block,kernel_size,pool_stride,pool_sigma,invariant_channels,max_rot_order,img_size,best_val_loss,test_acc,test_loss,best_ckpt,device,cuda_name,status
