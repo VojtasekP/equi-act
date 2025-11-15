@@ -10,3 +10,4 @@ logs/
 *.pbs
 .vscode/
 ModelNet10/
+sweeps/
