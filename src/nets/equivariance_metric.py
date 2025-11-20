@@ -110,7 +110,11 @@ def check_equivariance_batch_r2(
 
     else:
         input_tupe = model.input_type
-        out_type = model.output_type
+        out_type = getattr(model, "output_type", None)
+        if out_type is None:
+            eq_layers = getattr(model, "eq_layers", None)
+            if eq_layers:
+                out_type = eq_layers[-1].out_type
         inference = model.forward_features
     thetas = np.linspace(0.0, 2*np.pi, num_samples, endpoint=False)
     elems = make_group_elements(r2_act, thetas)

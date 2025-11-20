@@ -47,7 +47,7 @@ class LitHnn(L.LightningModule):
                  invar_type='norm', 
                  pool_type='max',
                  invariant_channels=64,
-                 bn=True,
+                 bn="Normbn",
                  activation_type="gated_sigmoid",
                  lr=0.001,
                  weight_decay=0.0001,
@@ -415,7 +415,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=str, default="research_task_hws")
     parser.add_argument("--name", type=str, default="HNet_experiment")
-    parser.add_argument("--dataset", type=str, default="mnist_rot",
+    parser.add_argument("--dataset", type=str, default="resisc45",
                         choices=["mnist_rot", "resisc45", "colorectal_hist", "eurosat"])
     parser.add_argument("--flip", type=bool, default=False, help="for O2")
     parser.add_argument("--epochs", type=int, default=50)
@@ -426,11 +426,11 @@ if __name__ == "__main__":
     parser.add_argument("--exp_dump", type=float, default=0.9)
     parser.add_argument("--channels_per_block", default=(16, 24, 32, 32, 48, 64))
     parser.add_argument("--kernels_per_block", default=(7, 5, 5, 5, 5, 5))
-    parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 2))
+    parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 0))
     parser.add_argument("--channels_multiplier", type=float, default=1.0)
     parser.add_argument("--conv_sigma", type=float, default=0.6)
     parser.add_argument("--pool_after_every_n_blocks", default=2)
-    parser.add_argument("--activation_type", default="gated_shared_sigmoid", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu_16", "fourier_elu_16", "fourier_relu_8", "fourier_elu_8", "fourier_relu_32", "fourier_elu_32", "fourier_relu_4", "fourier_elu_4"])
+    parser.add_argument("--activation_type", default="gated_shared_sigmoid", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu_16", "fourier_elu_16", "fourier_relu_8", "fourier_elu_8", "fourier_relu_32", "fourier_elu_32", "fourier_relu_4", "fourier_elu_4", "non_equi_relu", "non_equi_bn"])
     parser.add_argument("--pool_size", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=0.66)
     parser.add_argument("--invar_type", type=str, default='norm', choices=['conv2triv', 'norm'])

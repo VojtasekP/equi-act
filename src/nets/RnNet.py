@@ -14,7 +14,9 @@ ACT_MAP = {
     "fourier_relu": "p_relu",
     "fourier_elu": "p_elu",
     "gated_sigmoid": "sigmoid",
-    "gated_shared_sigmoid": "sigmoid"
+    "gated_shared_sigmoid": "sigmoid",
+    "non_equi_relu": "p_relu",
+    "non_equi_bn": "sigmoid"
 }
 
 BN_MAP_2d = {
@@ -50,13 +52,33 @@ class RetypeModule(nn.EquivariantModule):
         return nn.GeometricTensor(input.tensor, self.out_type)
     
     def evaluate_output_shape(self, input_shape):
-        # identity on the data shape
         return input_shape
 
     def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-6):
-        # You can optionally implement a quick stochastic check here,
-        # but for a pure retype this is usually skipped or delegated.
+
         return True
+    
+class NonEquivariantTorchOp(nn.EquivariantModule):
+    """
+    Wraps a regular torch.nn module to operate on GeometricTensor data.
+    This deliberately breaks equivariance because the wrapped module is unaware
+    of the field structure and only sees the raw tensor.
+    """
+    def __init__(self, in_type: nn.FieldType, torch_module: torch.nn.Module):
+        super().__init__()
+        self.in_type = in_type
+        self.out_type = in_type
+        self.torch_module = torch_module
+
+    def forward(self, input: nn.GeometricTensor):
+        x = self.torch_module(input.tensor)
+        return nn.GeometricTensor(x, self.out_type)
+    
+    def evaluate_output_shape(self, input_shape):
+        return input_shape
+
+    def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-6):
+        return False
     
 class RnNet(ABC, torch.nn.Module):
     def __init__(self,
@@ -90,11 +112,13 @@ class RnNet(ABC, torch.nn.Module):
         self.mnist = mnist
 
         if activation_type.split("_")[0] in ["fourier"]:
-            #remove the last _16
+            #remove the last _n
             self.N=int(activation_type.split("_")[-1])
             activation_type = "_".join(activation_type.split("_")[:-1])
         self.activation_type = activation_type
-        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu", "gated_shared_sigmoid"]
+        # here might confusion arise as we added non_equi_bn to activation types, even that it is gated sigmoid with classical nonequi batch norm. This decision was made purly out of implementational ease
+        
+        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu", "gated_shared_sigmoid", "non_equi_relu", "non_equi_bn"]
         if activation_type == "gated_sigmoid":
             build_layer = self.make_gated_block
         elif activation_type in ["norm_relu", "norm_squash", "norm_sigmoid"]:
@@ -103,6 +127,10 @@ class RnNet(ABC, torch.nn.Module):
             build_layer = self.make_fourier_block
         elif activation_type in ["gated_shared_sigmoid"]:
             build_layer = self.make_gated_block_shared
+        elif activation_type == "non_equi_relu":
+            build_layer = self.make_non_equi_layer_nonlin
+        elif activation_type == "non_equi_bn":
+            build_layer = self.make_non_equi_layer_bn
         self.non_linearity = self._create_fund_non_linearity(activation_type) # determines the non-linearity used in norm and fourier blocks, gated is fixed on relu
 
         self.mask = nn.MaskModule(self.input_type, grid_size, margin=1)
@@ -395,6 +423,75 @@ class R2Net(RnNet):
 
 
         return layers
+    
+    def make_non_equi_layer_nonlin(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        """
+        Conv -> equivariant batch-norm -> plain torch ReLU (breaks equivariance).
+        """
+        layers = []
+        channels = adjust_channels(channels,
+                                   self.r2_act,
+                                   kernel_size,
+                                   activation_type=self.activation_type,
+                                   layer_index=self.LAYER,
+                                   last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                   max_frequency=self.max_rot_order,
+                                   mnist=self.mnist)
+        vector_rep = []
+        for irr in self.r2_act.irreps:
+            if irr.is_trivial():
+                continue
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            vector_rep.extend([irr] * mult * channels)
+        scalar_rep = [self.r2_act.trivial_repr] * channels
+        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
+        vector_field = nn.FieldType(self.r2_act, vector_rep)
+        feat_type_out = scalar_field + vector_field
+
+        layers.append(nn.R2Conv(in_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma))
+        layers.append(self._build_batch_norm(layers[-1].out_type))
+        layers.append(NonEquivariantTorchOp(layers[-1].out_type, torch.nn.ReLU(inplace=True)))
+        return layers
+
+    def make_non_equi_layer_bn(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        """
+        Conv -> non-equivariant torch BatchNorm2d -> gated nonlinearity (non-shared).
+        """
+        layers = []
+        channels = adjust_channels(channels,
+                                   self.r2_act,
+                                   kernel_size,
+                                   activation_type=self.activation_type,
+                                   layer_index=self.LAYER,
+                                   last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                   max_frequency=self.max_rot_order,
+                                   mnist=self.mnist)
+        vector_rep = []
+        for irr in self.r2_act.irreps:
+            if irr.is_trivial():
+                continue
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            vector_rep.extend([irr] * mult * channels)
+        scalar_rep = [self.r2_act.trivial_repr] * channels
+        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
+        vector_field = nn.FieldType(self.r2_act, vector_rep)
+
+        gate_repr = [self.r2_act.trivial_repr] * len(vector_rep)
+        gate_field = nn.FieldType(self.r2_act, gate_repr) + vector_field
+        full_field = scalar_field + gate_field
+
+        layers.append(nn.R2Conv(in_type, full_field, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma))
+        layers.append(NonEquivariantTorchOp(layers[-1].out_type, torch.nn.BatchNorm2d(layers[-1].out_type.size)))
+
+        non_linearity = nn.MultipleModule(
+            in_type=full_field,
+            labels=['scalar'] * len(scalar_rep) + ['gated'] * len(gate_field),
+            modules=[(nn.ELU(scalar_field), 'scalar'), (nn.GatedNonLinearity1(gate_field), 'gated')],
+            reshuffle=0
+        )
+        layers.append(non_linearity)
+        return layers
+    
     def make_gated_block_shared(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
         layers = []
         channels = adjust_channels(channels, 
@@ -807,4 +904,72 @@ class R3Net(RnNet):
         layers.append(activation)
 
         layers.append(RetypeModule(feat_type_out, base_field))
+        return layers
+    
+    def make_non_equi_layer_nonlin(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        """
+        Conv -> equivariant batch-norm -> plain torch ReLU (breaks equivariance).
+        """
+        layers = []
+        channels = adjust_channels(channels,
+                                   self.r3_act,
+                                   kernel_size,
+                                   activation_type=self.activation_type,
+                                   layer_index=self.LAYER,
+                                   last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                   max_frequency=self.max_rot_order,
+                                   mnist=self.mnist)
+        vector_rep = []
+        for irr in self.r3_act.irreps:
+            if irr.is_trivial():
+                continue
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            vector_rep.extend([irr] * mult * channels)
+        scalar_rep = [self.r3_act.trivial_repr] * channels
+        scalar_field = nn.FieldType(self.r3_act, scalar_rep)
+        vector_field = nn.FieldType(self.r3_act, vector_rep)
+        feat_type_out = scalar_field + vector_field
+
+        layers.append(nn.R3Conv(in_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma))
+        layers.append(self._build_batch_norm(layers[-1].out_type))
+        layers.append(NonEquivariantTorchOp(layers[-1].out_type, torch.nn.ReLU(inplace=True)))
+        return layers
+
+    def make_non_equi_layer_bn(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        """
+        Conv -> non-equivariant torch BatchNorm3d -> gated nonlinearity (non-shared).
+        """
+        layers = []
+        channels = adjust_channels(channels,
+                                   self.r3_act,
+                                   kernel_size,
+                                   activation_type=self.activation_type,
+                                   layer_index=self.LAYER,
+                                   last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                   max_frequency=self.max_rot_order,
+                                   mnist=self.mnist)
+        vector_rep = []
+        for irr in self.r3_act.irreps:
+            if irr.is_trivial():
+                continue
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            vector_rep.extend([irr] * mult * channels)
+        scalar_rep = [self.r3_act.trivial_repr] * channels
+        scalar_field = nn.FieldType(self.r3_act, scalar_rep)
+        vector_field = nn.FieldType(self.r3_act, vector_rep)
+
+        gate_repr = [self.r3_act.trivial_repr] * len(vector_rep)
+        gate_field = nn.FieldType(self.r3_act, gate_repr) + vector_field
+        full_field = scalar_field + gate_field
+
+        layers.append(nn.R3Conv(in_type, full_field, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma))
+        layers.append(NonEquivariantTorchOp(layers[-1].out_type, torch.nn.BatchNorm3d(layers[-1].out_type.size)))
+
+        non_linearity = nn.MultipleModule(
+            in_type=full_field,
+            labels=['scalar'] * len(scalar_rep) + ['gated'] * len(gate_field),
+            modules=[(nn.ELU(scalar_field), 'scalar'), (nn.GatedNonLinearity1(gate_field), 'gated')],
+            reshuffle=0
+        )
+        layers.append(non_linearity)
         return layers
