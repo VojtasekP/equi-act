@@ -1,0 +1,11 @@
+activation,bn,Eurosat_results_mean,Eurosat_results_std,Mnistrot_results_mean,Mnistrot_results_std,Colorectal_hist_results_mean,Colorectal_hist_results_std
+fourier_elu_16,IIDbn,0.9612,0.0015,0.9885,0.0006,0.9035,0.0154
+fourier_elu_16,Normbn,0.9613,0.0019,0.9886,0.0004,0.9019,0.0099
+gated_shared_sigmoid,IIDbn,0.9682,0.0031,0.9895,0.0004,0.9157,0.0104
+gated_shared_sigmoid,Normbn,0.9674,0.0023,0.9888,0.0009,0.9173,0.0108
+gated_sigmoid,IIDbn,0.9686,0.0018,0.9894,0.0003,0.9147,0.0084
+gated_sigmoid,Normbn,0.9678,0.0029,0.989,0.0003,0.912,0.0102
+norm_relu,IIDbn,0.9603,0.0024,0.987,0.0005,0.928,0.0068
+norm_relu,Normbn,0.957,0.0051,0.987,0.0003,0.9291,0.007
+norm_squash,IIDbn,0.959,0.002,0.9848,0.0001,0.9152,0.0104
+norm_squash,Normbn,0.9598,0.0011,0.984,0.0011,0.9163,0.0095
