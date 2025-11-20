@@ -1,15 +1,31 @@
-.idea/
-__pycache__
-lightning_logs/
-mnist_rotation_new/
-mnist_rotation_new.zip
+# Python/Lightning
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Packaging/build
+*.egg-info/
+dist/
+build/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Checkpoints, models, outputs
 wandb/
-research_task_hws/
+saved_models/
 *.ckpt
+*.pt
+*.pth
 logs/
-*.pbs
-.vscode/
-ModelNet10/
-sweeps/
-testing_ntbks/
-equiact.egg-info/
+
+# Datasets / downloads
+data/
+colorectal_hist/
+eurosat/
+mnist_rotation_new/
+dataset_cache/
