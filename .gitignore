@@ -12,3 +12,4 @@ logs/
 ModelNet10/
 sweeps/
 testing_ntbks/
+equiact.egg-info/
