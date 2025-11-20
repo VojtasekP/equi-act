@@ -1,25 +1,51 @@
-import requests, zipfile, os
+from pathlib import Path
+import os
+import requests
+import zipfile
 
-url = "http://www.iro.umontreal.ca/~lisa/icml2007data/mnist_rotation_new.zip"
-zip_path = "mnist_rotation_new.zip"
-out_dir = "src/datasets_utils/mnist_rotation_new"
 
-os.makedirs(out_dir, exist_ok=True)
+URL = "http://www.iro.umontreal.ca/~lisa/icml2007data/mnist_rotation_new.zip"
+DATA_DIR = Path(__file__).resolve().parent / "mnist_rotation_new"
 
-# Download if not already present
-if not os.path.exists(zip_path):
-    print("Downloading dataset...")
-    r = requests.get(url, stream=True)
-    r.raise_for_status()
-    with open(zip_path, "wb") as f:
-        for chunk in r.iter_content(chunk_size=8192):
-            f.write(chunk)
-else:
-    print("Zip file already exists, skipping download.")
 
-# Extract with Python
-print("Extracting dataset...")
-with zipfile.ZipFile(zip_path, "r") as zf:
-    zf.extractall(out_dir)
+def download_mnist_rotation(out_dir: str | Path | None = None) -> Path:
+    """
+    Download and extract the rotated MNIST dataset if it's not already present.
+    Returns the path to the extracted directory.
+    """
+    target_dir = Path(out_dir) if out_dir else DATA_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
 
-print("Done! Files in:", out_dir)
+    train_file = target_dir / "mnist_all_rotation_normalized_float_train_valid.amat"
+    test_file = target_dir / "mnist_all_rotation_normalized_float_test.amat"
+    if train_file.exists() and test_file.exists():
+        print(f"MNIST rotation already present in {target_dir}, skipping download.")
+        return target_dir
+
+    zip_path = target_dir.parent / "mnist_rotation_new.zip"
+    if not zip_path.exists():
+        print("Downloading rotated MNIST...")
+        resp = requests.get(URL, stream=True, timeout=60)
+        resp.raise_for_status()
+        with open(zip_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+    else:
+        print(f"Using existing zip at {zip_path}")
+
+    print("Extracting dataset...")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(target_dir)
+
+    # Clean up the archive to save space
+    try:
+        zip_path.unlink()
+    except OSError:
+        pass
+
+    print("Done! Files in:", target_dir)
+    return target_dir
+
+
+if __name__ == "__main__":
+    download_mnist_rotation()

@@ -260,21 +260,23 @@ def _train_impl(config):
     if dataset == "mnist_rot":
         datamodule = MnistRotDataModule(batch_size=config.batch_size, 
                                         data_dir="./src/datasets_utils/mnist_rotation_new", 
-                                        img_size=getattr(config, "img_size", 29))
+                                        img_size=getattr(config, "img_size", None),
+                                        train_fraction=train_subset_fraction)
         grey_scale = True
         mnist=True
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
-                                        img_size=getattr(config, "img_size", 256))
+                                        img_size=getattr(config, "img_size", None),
+                                        train_fraction=train_subset_fraction)
         grey_scale = False
     elif dataset == "colorectal_hist":
         datamodule = ColorectalHistDataModule(batch_size=config.batch_size,
-                                              img_size=getattr(config, "img_size", 150),
+                                              img_size=getattr(config, "img_size", None),
                                               train_fraction=train_subset_fraction)
         grey_scale = False
     elif dataset == "eurosat":
         datamodule = EuroSATDataModule(batch_size=config.batch_size,
-                                       img_size=getattr(config, "img_size", 64),
+                                       img_size=getattr(config, "img_size", None),
                                        seed=seed,
                                        train_fraction=train_subset_fraction)
         grey_scale = False
@@ -290,10 +292,9 @@ def _train_impl(config):
     wandb.config.update({
         "dataset": dataset
     }, allow_val_change=True)
-    if dataset == "eurosat":
-        wandb.config.update({
-            "train_subset_fraction": train_subset_fraction
-        }, allow_val_change=True)
+    wandb.config.update({
+        "train_subset_fraction": train_subset_fraction
+    }, allow_val_change=True)
     wandb.config.update({
         "activation_type": getattr(config, "activation_type", None),
         "normalization": getattr(config, "bn", None),
@@ -438,7 +439,7 @@ if __name__ == "__main__":
     parser.add_argument("--invariant_channels", type=int, default=64)
     parser.add_argument("--bn", default="Normbn", choices=["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"])
     parser.add_argument("--max_rot_order", type=float, default=3)
-    parser.add_argument("--img_size", type=int, default=150)
+    parser.add_argument("--img_size", type=int, default=None)
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--invar_error_logging", type=bool, default=False , help="Disable invariance error logging to speed up training")

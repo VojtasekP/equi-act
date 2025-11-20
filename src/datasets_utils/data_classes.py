@@ -11,6 +11,7 @@ from torchvision.transforms import Compose, Pad, Resize, RandomRotation, Interpo
 from torch_geometric.transforms import NormalizeScale, SamplePoints
 from torch_geometric.datasets import ModelNet
 from torch_geometric.loader import DataLoader as PyGDataLoader
+from datasets_utils.mnist_download import download_mnist_rotation
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -21,7 +22,7 @@ class MnistRotDataset(Dataset):
         assert mode in ['train', 'test']
 
         self.transform = transform
-        root = Path(data_dir) if data_dir else (Path(__file__).resolve().parents[1] / "SO2_Nets" / "datasets_utils" / "mnist_rotation_new")
+        root = Path(data_dir) if data_dir else (Path(__file__).resolve().parent / "mnist_rotation_new")
         if mode == 'train':
             file = root / "mnist_all_rotation_normalized_float_train_valid.amat"
         elif mode == 'test':
@@ -46,12 +47,15 @@ class MnistRotDataset(Dataset):
 
 
 class MnistRotDataModule(L.LightningDataModule):
-    def __init__(self, batch_size=64, data_dir=None, img_size=29, seed: int = 42):
+    def __init__(self, batch_size=64, data_dir=None, img_size=None, seed: int = 42, train_fraction: float = 1.0):
         super().__init__()
         self.batch_size = batch_size
         self.data_dir = data_dir
         self.num_classes = 10
+        default_img_size = 29
         max_image_size = 29
+        if img_size is None:
+            img_size = default_img_size
         if img_size > max_image_size:
             img_size = max_image_size
         self.img_size = img_size
@@ -69,12 +73,32 @@ class MnistRotDataModule(L.LightningDataModule):
         ])
 
         self.generator = torch.Generator().manual_seed(seed)
+        if not (0 < train_fraction <= 1.0):
+            raise ValueError("train_fraction must be in (0, 1].")
+        self.train_fraction = train_fraction
+
+    def prepare_data(self):
+        """
+        Ensure the rotated MNIST files are present; download and extract if missing.
+        """
+        root = Path(self.data_dir) if self.data_dir else (Path(__file__).resolve().parent / "mnist_rotation_new")
+        download_mnist_rotation(root)
 
     def setup(self, stage: str):
         if stage == 'fit':
             self.mnist_full = MnistRotDataset(mode='train', transform=self.train_transform, data_dir=self.data_dir)
 
-            self.mnist_train, self.mnist_val = torch.utils.data.random_split(self.mnist_full, [0.8, 0.2], generator=self.generator)
+            if self.train_fraction < 1.0:
+                subset_size = max(1, int(len(self.mnist_full) * self.train_fraction))
+                self.mnist_full, _ = torch.utils.data.random_split(
+                    self.mnist_full,
+                    [subset_size, len(self.mnist_full) - subset_size],
+                    generator=self.generator
+                )
+            n_total = len(self.mnist_full)
+            n_train = int(0.8 * n_total)
+            n_val = n_total - n_train
+            self.mnist_train, self.mnist_val = torch.utils.data.random_split(self.mnist_full, [n_train, n_val], generator=self.generator)
         if stage == 'test':
             self.mnist_test = MnistRotDataset(mode='test', transform=self.test_transform, data_dir=self.data_dir)
         if stage == 'predict':
@@ -156,17 +180,23 @@ def make_transforms(img_size: int) -> Tuple[Compose, Compose]:
     return train_tf, eval_tf
 
 class Resisc45DataModule(L.LightningDataModule):
-    def __init__(self, batch_size: int = 256, img_size: int = 150, seed: int = 42):
+    def __init__(self, batch_size: int = 256, img_size: int | None = None, seed: int = 42, train_fraction: float = 1.0):
         super().__init__()
         self.batch_size = batch_size
         self.num_classes = 45
+        default_img_size = 256
         max_image_size = 256
+        if img_size is None:
+            img_size = default_img_size
         if img_size > max_image_size:
             img_size = max_image_size
         self.img_size = img_size
         self.train_tf, self.eval_tf = make_transforms(img_size)
 
         self.seed = seed
+        if not (0 < train_fraction <= 1.0):
+            raise ValueError("train_fraction must be in (0, 1].")
+        self.train_fraction = train_fraction
 
     def setup(self, stage=None):
 
@@ -175,6 +205,10 @@ class Resisc45DataModule(L.LightningDataModule):
         train_split = ds["train"]
         val_split = ds["validation"]
         test_split = ds["test"]
+
+        if self.train_fraction < 1.0:
+            subset_size = max(1, int(len(train_split) * self.train_fraction))
+            train_split = train_split.shuffle(seed=self.seed).select(range(subset_size))
 
         self.train_ds = HFImageTorchDataset(train_split, self.train_tf, "image", "label")
         self.val_ds = HFImageTorchDataset(val_split, self.eval_tf,  "image", "label")
@@ -195,13 +229,16 @@ class Resisc45DataModule(L.LightningDataModule):
 class EuroSATDataModule(L.LightningDataModule):
     def __init__(self,
                  batch_size: int = 64,
-                 img_size: int = 64,
+                 img_size: int | None = None,
                  seed: int = 42,
                  train_fraction: float = 1.0):
         super().__init__()
         self.batch_size = batch_size
         self.num_classes = 10
+        default_img_size = 64
         max_image_size = 64
+        if img_size is None:
+            img_size = default_img_size
         if img_size > max_image_size:
             img_size = max_image_size
         self.img_size = img_size
@@ -244,14 +281,17 @@ class EuroSATDataModule(L.LightningDataModule):
 class ColorectalHistDataModule(L.LightningDataModule):
     def __init__(self,
                  batch_size: int = 64,
-                 img_size: int = 150,
+                 img_size: int | None = None,
                  seed: int = 42,
                  train_fraction: float = 1.0):
         super().__init__()
         self.batch_size = batch_size
         self.seed = seed
         self.num_classes = 8
+        default_img_size = 150
         max_image_size = 150
+        if img_size is None:
+            img_size = default_img_size
         if img_size > max_image_size:
             img_size = max_image_size
         self.img_size = img_size
