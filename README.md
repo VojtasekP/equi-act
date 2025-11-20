@@ -33,7 +33,7 @@ uv run src/train.py --dataset resisc45 --flip True --activation_type gated_share
 ```
 
 ## Choices
-- `--dataset`: mnist_rot (auto-download), resisc45, colorectal_hist, eurosat (`--train_subset_fraction` in (0,1])
+- `--dataset`: mnist_rot, resisc45, colorectal_hist, eurosat (`--train_subset_fraction` in (0,1] for smaller train set size)
 - `--activation_type`: gated_sigmoid, gated_shared_sigmoid, norm_relu, norm_squash, fourier_relu_{4,8,16,32}, fourier_elu_{4,8,16,32}, non_equi_relu, non_equi_bn
 - `--bn`: IIDbn, Normbn, FieldNorm, GNormBatchNorm
 
