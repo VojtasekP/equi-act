@@ -1,7 +1,5 @@
 # equi-act
 
-Copy/paste friendly steps to set up and run.
-
 ## Setup
 install uv if needed: https://github.com/astral-sh/uv
 ```bash
