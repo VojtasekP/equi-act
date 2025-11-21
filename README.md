@@ -1,19 +1,32 @@
 # equi-act
 
 ## Setup
+### Recomended way:
+
 install uv if needed: https://github.com/astral-sh/uv
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
-install the dependancies
+install the dependancies and activate env with uv
 ```bash
 uv sync
+source .venv/bin/activate
 ```
 
+### Pip and conda
+install with pip:
+```bash
+pip install -r requirements.txt
+```
+install with conda:
+```bash
+conda env create -f env.yml
+conda activate equi-act
+```
 ## Run
 Main script in src/train.py
 ```bash
-uv run src/train.py \
+python src/train.py \
   --dataset <mnist_rot|resisc45|colorectal_hist|eurosat> \
   --activation_type <see below> \
   --bn <IIDbn|Normbn|FieldNorm|GNormBatchNorm> \
@@ -26,13 +39,13 @@ uv run src/train.py \
 Quick samples to start:
 ```bash
 # Rotated MNIST
-uv run src/train.py --dataset mnist_rot --batch_size 64 --activation_type gated_sigmoid --bn Normbn
+python src/train.py --dataset mnist_rot --batch_size 64 --activation_type gated_sigmoid --bn Normbn
 
 # EuroSAT with 25% train split
-uv run src/train.py --dataset eurosat --train_subset_fraction 0.25 --activation_type fourier_relu_16 --bn Normbn
+python src/train.py --dataset eurosat --train_subset_fraction 0.25 --activation_type fourier_relu_16 --bn Normbn
 
 # Resisc45 with flips
-uv run src/train.py --dataset resisc45 --flip True --activation_type gated_shared_sigmoid --bn IIDbn
+python src/train.py --dataset resisc45 --flip True --activation_type gated_shared_sigmoid --bn IIDbn
 ```
 
 ## Choices
