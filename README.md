@@ -1,26 +1,23 @@
 # equi-act
 
-## Setup
-### Recomended way:
-
-install uv if needed: https://github.com/astral-sh/uv
+## Setup (Python 3.10)
+### Recommended (uv)
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-install the dependancies and activate env with uv
-```bash
-uv sync
+curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv
+uv sync --python 3.10                             # create .venv with Python 3.10 and install deps
 source .venv/bin/activate
 ```
 
-### Pip and conda
-install with pip:
+### Pip
 ```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
-install with conda:
+
+### Conda
 ```bash
-conda env create -f env.yml
+conda env create -f env.yml   # env.yml pins python=3.10
 conda activate equi-act
 ```
 ## Run
