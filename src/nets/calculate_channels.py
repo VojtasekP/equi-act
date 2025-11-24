@@ -56,7 +56,7 @@ def adjust_channels(
         # r_in and r_out are [trivial] + irreps
         r_in_ref  = FieldType(ref_group, [ref_group.trivial_repr] + list(irreps_ref))
         r_out_ref = FieldType(ref_group, [ref_group.trivial_repr] + list(irreps_ref))
-        if activation_type in ['fourier_relu', 'fourier_elu', 'norm_relu', 'norm_squash', 'non_equi_relu']:
+        if activation_type in ['fourier_relu', 'fourier_elu', 'norm_relu', 'normbn_relu','norm_squash', 'non_equi_relu']:
             r_in = FieldType(group, [group.trivial_repr]  + irreps)
             r_out = FieldType(group, [group.trivial_repr] + irreps)
         elif activation_type in ['gated_shared_sigmoid']:

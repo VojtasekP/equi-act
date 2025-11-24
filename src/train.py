@@ -16,6 +16,7 @@ from lightning.pytorch.loggers import WandbLogger
 
 import wandb
 from nets.RnNet import R2Net
+from nets.baseline_resnet import LitResNet18
 from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, EuroSATDataModule
 import argparse
 import nets.equivariance_metric as em
@@ -31,7 +32,7 @@ print("Using device:", device)
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-
+torch.autograd.set_detect_anomaly(True)
 class LitHnn(L.LightningModule):
     def __init__(self,
                  n_classes=10,
@@ -101,6 +102,37 @@ class LitHnn(L.LightningModule):
         self.invar_check_every_n_epochs = max(1, int(invar_check_every_n_epochs))
         self.invar_chunk_size = max(1, int(invar_chunk_size))
         self.num_of_batches_to_use_for_invar_logging = max(1, int(num_of_batches_to_use_for_invar_logging))
+        # self._nan_hooks = []
+
+        # # register NaN/Inf guard hooks on all modules to pinpoint the source
+        # def _nan_hook(module, inp, out):
+        #     # check inputs
+        #     for t in inp:
+        #         if torch.is_tensor(t):
+        #             if not torch.isfinite(t).all():
+        #                 bad = torch.nonzero(~torch.isfinite(t), as_tuple=False)[0].tolist()
+        #                 raise RuntimeError(
+        #                     f"NaN/Inf detected in input of {module.__class__.__name__} at {bad}, "
+        #                     f"shape={tuple(t.shape)}"
+        #                 )
+        #     # check outputs (GeometricTensor has .tensor)
+        #     outs = out
+        #     if isinstance(out, (list, tuple)):
+        #         outs = out
+        #     else:
+        #         outs = (out,)
+        #     for t in outs:
+        #         if hasattr(t, "tensor"):
+        #             t = t.tensor
+        #         if torch.is_tensor(t) and not torch.isfinite(t).all():
+        #             bad = torch.nonzero(~torch.isfinite(t), as_tuple=False)[0].tolist()
+        #             raise RuntimeError(
+        #                 f"NaN/Inf detected after {module.__class__.__name__} at {bad}, "
+        #                 f"shape={tuple(t.shape)}"
+        #             )
+
+        # for m in self.model.modules():
+        #     self._nan_hooks.append(m.register_forward_hook(_nan_hook))
 
     def _should_log_invar(self, stage: str, batch_idx: int) -> bool:
         if not self.invar_error_logging:
@@ -161,13 +193,24 @@ class LitHnn(L.LightningModule):
 
     def shared_step(self, batch, acc_metric):
         x, y = batch
+        # self._check_finite_params()
         y_hat = self.model(x)
         loss = self.loss_fn(y_hat, y)
         acc = acc_metric(y_hat, y)
         return loss, acc
 
+    # def _check_finite_params(self):
+    #     for name, p in self.model.named_parameters():
+    #         if p is None:
+    #             continue
+    #         if not torch.isfinite(p).all():
+    #             raise RuntimeError(f"NaN/Inf detected in parameter {name}, shape={tuple(p.shape)}")
+    #         if p.grad is not None and not torch.isfinite(p.grad).all():
+    #             raise RuntimeError(f"NaN/Inf detected in gradient of {name}, shape={tuple(p.grad.shape)}")
+
     def training_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, self.train_acc)
+        # self._check_finite_params()
         self.log('train_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         self.log('train_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return loss
@@ -249,6 +292,7 @@ def _train_impl(config):
     logger = WandbLogger(name=config.project, project=config.project)
 
     dataset = getattr(config, "dataset", "None")
+    model_type = getattr(config, "model_type", "equivariant")
     train_subset_fraction = getattr(config, "train_subset_fraction", 1.0)
     model_export_dir = getattr(config, "model_export_dir", "saved_models")
     model_export_subdir = getattr(config, "model_export_subdir", default_subdir)
@@ -256,7 +300,8 @@ def _train_impl(config):
     if not model_export_subdir:
         model_export_subdir = default_subdir
     flip_flag = bool(getattr(config, "flip", False))
-    mnist=False
+    baseline_pretrained = bool(getattr(config, "baseline_pretrained", False))
+    mnist = False
     if dataset == "mnist_rot":
         datamodule = MnistRotDataModule(batch_size=config.batch_size, 
                                         data_dir="./src/datasets_utils/mnist_rotation_new", 
@@ -286,70 +331,87 @@ def _train_impl(config):
     n_classes_dm = datamodule.num_classes
     img_size = datamodule.img_size
     wandb.config.update({
-        "img_size": img_size
-    }, allow_val_change=True)
-    # Log choices
-    wandb.config.update({
-        "dataset": dataset
-    }, allow_val_change=True)
-    wandb.config.update({
-        "train_subset_fraction": train_subset_fraction
-    }, allow_val_change=True)
-    wandb.config.update({
-        "activation_type": getattr(config, "activation_type", None),
-        "normalization": getattr(config, "bn", None),
+        "img_size": img_size,
+        "dataset": dataset,
+        "train_subset_fraction": train_subset_fraction,
         "seed": seed,
         "model_export_dir": model_export_dir,
         "model_export_subdir": model_export_subdir,
+        "model_type": model_type,
     }, allow_val_change=True)
-    channels_per_block_updated = [int(c * config.channels_multiplier) for c in config.channels_per_block]
-    wandb.config.update({
-        "channels_per_block": channels_per_block_updated
-    }, allow_val_change=True)
-    updated_invariant_channels = int(config.invariant_channels*config.channels_multiplier)
-    wandb.config.update({
-        'invariant_channels': updated_invariant_channels}
-    , allow_val_change=True)
-    invar_check_every = getattr(config, "invar_check_every_n_epochs", 1)
-    invar_chunk_size = getattr(config, "invar_chunk_size", 4)
-    wandb.config.update({
-        'invar_check_every_n_epochs': invar_check_every,
-        'invar_chunk_size': invar_chunk_size
-    }, allow_val_change=True)
-    
-    model = LitHnn(
-        n_classes=n_classes_dm,
-        max_rot_order=config.max_rot_order,
-        flip=config.flip,
 
-        channels_per_block=channels_per_block_updated,
-        kernels_per_block=config.kernels_per_block,
-        paddings_per_block=config.paddings_per_block,
-        pool_after_every_n_blocks=config.pool_after_every_n_blocks,
-        conv_sigma=config.conv_sigma,
-        activation_type=config.activation_type,
+    if model_type == "equivariant":
+        wandb.config.update({
+            "activation_type": getattr(config, "activation_type", None),
+            "normalization": getattr(config, "bn", None),
+        }, allow_val_change=True)
 
-        pool_size=config.pool_size,
-        pool_sigma=config.pool_sigma,
-        invar_type=config.invar_type,
-        pool_type=config.pool_type,
-        invariant_channels=updated_invariant_channels,
-        bn=config.bn,
-        lr=config.lr,
-        weight_decay=config.weight_decay,
-        epochs=config.epochs,
-        burin_in_period=config.burin_in_period,
-        exp_dump=config.exp_dump,
+        channels_per_block_updated = [int(c * config.channels_multiplier) for c in config.channels_per_block]
+        wandb.config.update({
+            "channels_per_block": channels_per_block_updated
+        }, allow_val_change=True)
+        updated_invariant_channels = int(config.invariant_channels*config.channels_multiplier)
+        wandb.config.update({
+            'invariant_channels': updated_invariant_channels}
+        , allow_val_change=True)
+        invar_check_every = getattr(config, "invar_check_every_n_epochs", 1)
+        invar_chunk_size = getattr(config, "invar_chunk_size", 4)
+        wandb.config.update({
+            'invar_check_every_n_epochs': invar_check_every,
+            'invar_chunk_size': invar_chunk_size
+        }, allow_val_change=True)
         
-        grey_scale=grey_scale,
-        img_size=img_size,
-        mnist=mnist,
-        invar_error_logging=config.invar_error_logging,
-        invar_check_every_n_epochs=invar_check_every,
-        invar_chunk_size=invar_chunk_size,
-        num_of_batches_to_use_for_invar_logging=config.num_of_batches_to_use_for_invar_logging,
-        num_of_angles=config.num_of_angles,
-    )
+        model = LitHnn(
+            n_classes=n_classes_dm,
+            max_rot_order=config.max_rot_order,
+            flip=config.flip,
+
+            channels_per_block=channels_per_block_updated,
+            kernels_per_block=config.kernels_per_block,
+            paddings_per_block=config.paddings_per_block,
+            pool_after_every_n_blocks=config.pool_after_every_n_blocks,
+            conv_sigma=config.conv_sigma,
+            activation_type=config.activation_type,
+
+            pool_size=config.pool_size,
+            pool_sigma=config.pool_sigma,
+            invar_type=config.invar_type,
+            pool_type=config.pool_type,
+            invariant_channels=updated_invariant_channels,
+            bn=config.bn,
+            lr=config.lr,
+            weight_decay=config.weight_decay,
+            epochs=config.epochs,
+            burin_in_period=config.burin_in_period,
+            exp_dump=config.exp_dump,
+            
+            grey_scale=grey_scale,
+            img_size=img_size,
+            mnist=mnist,
+            invar_error_logging=config.invar_error_logging,
+            invar_check_every_n_epochs=invar_check_every,
+            invar_chunk_size=invar_chunk_size,
+            num_of_batches_to_use_for_invar_logging=config.num_of_batches_to_use_for_invar_logging,
+            num_of_angles=config.num_of_angles,
+        )
+    elif model_type == "resnet18":
+        in_channels = 1 if dataset == "mnist_rot" else 3
+        wandb.config.update({
+            "baseline_pretrained": baseline_pretrained,
+            "in_channels": in_channels,
+        }, allow_val_change=True)
+        model = LitResNet18(
+            n_classes=n_classes_dm,
+            lr=config.lr,
+            weight_decay=config.weight_decay,
+            epochs=config.epochs,
+            burin_in_period=config.burin_in_period,
+            exp_dump=config.exp_dump,
+            in_channels=in_channels,
+            pretrained=baseline_pretrained,
+        )
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
 
     chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
                             save_top_k=1, mode='min')
@@ -364,6 +426,7 @@ def _train_impl(config):
         devices=1,
         strategy="auto",
         precision=config.precision,
+        gradient_clip_val=1.0,
         deterministic=False,
         benchmark=False,
         log_every_n_steps=50,
@@ -384,12 +447,18 @@ def _train_impl(config):
     exported_ckpt = ""
     if best_ckpt_path:
         name_parts = [
+            model_type,
             dataset,
-            getattr(config, "activation_type", None),
-            getattr(config, "bn", None),
-            "flip" if flip_flag else None,
             f"seed{seed}",
         ]
+        if model_type == "equivariant":
+            name_parts.extend([
+                getattr(config, "activation_type", None),
+                getattr(config, "bn", None),
+                "flip" if flip_flag else None,
+            ])
+        elif model_type == "resnet18":
+            name_parts.append("pretrained" if baseline_pretrained else "scratch")
         exported_ckpt = _copy_model_checkpoint(best_ckpt_path, model_export_dir, model_export_subdir, name_parts)
 
     return {
@@ -416,8 +485,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", type=str, default="research_task_hws")
     parser.add_argument("--name", type=str, default="HNet_experiment")
-    parser.add_argument("--dataset", type=str, default="resisc45",
+    parser.add_argument("--dataset", type=str, default="mnist_rot",
                         choices=["mnist_rot", "resisc45", "colorectal_hist", "eurosat"])
+    parser.add_argument("--model_type", type=str, default="equivariant",
+                        choices=["equivariant", "resnet18"],
+                        help="Choose between the equivariant model and a baseline ResNet18.")
+    parser.add_argument("--baseline_pretrained", action="store_true",
+                        help="Use ImageNet pretrained weights when model_type=resnet18.")
     parser.add_argument("--flip", type=bool, default=False, help="for O2")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=16)
@@ -431,7 +505,7 @@ if __name__ == "__main__":
     parser.add_argument("--channels_multiplier", type=float, default=1.0)
     parser.add_argument("--conv_sigma", type=float, default=0.6)
     parser.add_argument("--pool_after_every_n_blocks", default=2)
-    parser.add_argument("--activation_type", default="gated_shared_sigmoid", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu_16", "fourier_elu_16", "fourier_relu_8", "fourier_elu_8", "fourier_relu_32", "fourier_elu_32", "fourier_relu_4", "fourier_elu_4", "non_equi_relu", "non_equi_bn"])
+    parser.add_argument("--activation_type", default="norm_relu", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu_16", "fourier_elu_16", "fourier_relu_8", "fourier_elu_8", "fourier_relu_32", "fourier_elu_32", "fourier_relu_4", "fourier_elu_4", "non_equi_relu", "non_equi_bn", "normbn_relu"])
     parser.add_argument("--pool_size", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=0.66)
     parser.add_argument("--invar_type", type=str, default='norm', choices=['conv2triv', 'norm'])

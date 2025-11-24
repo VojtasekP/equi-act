@@ -41,8 +41,8 @@ def _build_kernel(G: Group, irrep: List[tuple]):
     kernel = np.concatenate(kernel)
     return kernel
     
-
-class AdaptiveFourierPointwiseSO2(nn.Module):
+'''
+class AdaptiveFourierPointwiseSO2(torch.nn.Module):
     """
     Adaptive Fourier-based nonlinearity for SO(2) with per-location sampling matrices A(x).
 
@@ -262,7 +262,7 @@ class AdaptiveFourierPointwiseSO2(nn.Module):
 
 
 
-class FourierPointwiseInnerBn(nn.Module):
+class FourierPointwiseInnerBn(torch.nn.Module):
 
 
     def __init__(self, in_type: FieldType):
@@ -502,119 +502,23 @@ class FourierPointwiseInnerBn(nn.Module):
         return np.concatenate(errors).reshape(-1)
     
 
-
+'''
 class NormNonlinearityWithBN(EquivariantModule):
     
-    def __init__(self, in_type: FieldType, function: str = 'n_relu', bias: bool = True):
-        r"""
-        
-        Norm non-linearities.
-        This module applies a bias and an activation function over the norm of each field.
-        
-        The input representation of the fields is preserved by this operation.
-        
-        .. note ::
-            If 'squash' non-linearity (`function`) is chosen, no bias is allowed
-        
-        Args:
-            in_type (FieldType): the input field type
-            function (str, optional): the identifier of the non-linearity. It is used to specify which function to
-                                      apply. By default (``'n_relu'``), ReLU is used.
-            bias (bool, optional): add bias to norm of fields before computing the non-linearity. Default: ``True``
-
-        """
+    def __init__(self, in_type: FieldType, eps=1e-7, momentum=0.1, affine=True):
 
         assert isinstance(in_type.gspace, GSpace)
         
         super(NormNonlinearityWithBN, self).__init__()
 
-        for r in in_type.representations:
-            assert 'norm' in r.supported_nonlinearities, \
-                'Error! Representation "{}" does not support "norm" non-linearity'.format(r.name)
-
-        self.space = in_type.gspace
-        self.in_type = in_type
-        self.out_type = in_type
-        
-        self._nfields = None
-        self.log_bias = None
-
-        if function == 'n_relu':
-            self._function = torch.relu
-        elif function == 'n_sigmoid':
-            self._function = torch.sigmoid
-        elif function == 'n_softplus':
-            self._function = torch.nn.functional.softplus
-        elif function == "squash":
-            self._function = lambda t: t / (1.0 + t)
-            assert bias is False, 'Error! When using squash non-linearity, norm bias is not allowed'
-        else:
-            raise ValueError('Function "{}" not recognized!'.format(function))
-        
-        # group fields by their size and
-        #   - check if fields of the same size are contiguous
-        #   - retrieve the indices of the fields
-
-        # number of fields of each size
-        self._nfields = defaultdict(int)
-        
-        # indices of the channales corresponding to fields belonging to each group
-        _indices = defaultdict(lambda: [])
-        
-        # whether each group of fields is contiguous or not
-        self._contiguous = {}
-        
-        position = 0
-        last_size = None
-        for i, r in enumerate(self.in_type.representations):
-            
-            if r.size != last_size:
-                if not r.size in self._contiguous:
-                    self._contiguous[r.size] = True
-                else:
-                    self._contiguous[r.size] = False
-            last_size = r.size
-            
-            _indices[r.size] += list(range(position, position + r.size))
-            self._nfields[r.size] += 1
-            position += r.size
-        
-        for s, contiguous in self._contiguous.items():
-            if contiguous:
-                # for contiguous fields, only the first and last indices are kept
-                _indices[s] = torch.LongTensor([min(_indices[s]), max(_indices[s])+1])
-            else:
-                # otherwise, transform the list of indices into a tensor
-                _indices[s] = torch.LongTensor(_indices[s])
-                
-            # register the indices tensors as parameters of this module
-            self.register_buffer('indices_{}'.format(s), _indices[s])
-        
-        if bias:
-            # build a bias for each field
-            self.log_bias = Parameter(torch.zeros(1, len(self.in_type), 1, 1, dtype=torch.float), requires_grad=True)
-        else:
-            self.log_bias = None
-    
-        # build a sorted list of the fields groups, such that every time they are iterated through in the same order
-        self._order = sorted(self._contiguous.keys())
-        
-        self.eps = Parameter(torch.tensor(1e-10), requires_grad=False)
-
-        for r in in_type.representations:
-            assert 'norm' in r.supported_nonlinearities, \
-                'Error! Representation "{}" does not support "norm" non-linearity'.format(r.name)
-            # Norm batch-normalization assumes the fields to have mean 0. This is true as long as it doesn't contain
-            # the trivial representation
-            for irr in r.irreps:
-                assert not in_type.fibergroup._irreps[irr].is_trivial(), f"Input type contains trivial representation '{irr}'"
 
         self.space = in_type.gspace
         self.in_type = in_type
         self.out_type = in_type
         
         self.affine = affine
-        
+
+        self._relu = torch.nn.ReLU()
         # group fields by their size and
         #   - check if fields of the same size are contiguous
         #   - retrieve the indices of the fields
@@ -643,23 +547,30 @@ class NormNonlinearityWithBN(EquivariantModule):
             self._nfields[r.size] += 1
             position += r.size
         
-        for s, contiguous in self._contiguous.items():
+        for size, contiguous in self._contiguous.items():
             if contiguous:
                 # for contiguous fields, only the first and last indices are kept
-                _indices[s] = torch.LongTensor([min(_indices[s]), max(_indices[s])+1])
+                _indices[size] = torch.LongTensor([min(_indices[size]), max(_indices[size])+1])
             else:
                 # otherwise, transform the list of indices into a tensor
-                _indices[s] = torch.LongTensor(_indices[s])
+                _indices[size] = torch.LongTensor(_indices[size])
                 
             # register the indices tensors as parameters of this module
-            self.register_buffer(f'{s}_indices', _indices[s])
+            self.register_buffer(f'{size}_indices', _indices[size])
             
-            running_var = torch.ones((1, self._nfields[s], 1), dtype=torch.float)
-            self.register_buffer(f'{s}_running_var', running_var)
-            
+
+            shape = (self._nfields[size],)
+            running_var = torch.ones(shape, dtype=torch.float)
+            self.register_buffer(f'{size}_running_var', running_var)
+
+            running_mean = torch.zeros(shape, dtype=torch.float)
+            self.register_buffer(f'{size}_running_mean', running_mean)
             if self.affine:
-                weight = Parameter(torch.ones((1, self._nfields[s], 1)), requires_grad=True)
-                self.register_parameter(f'{s}_weight', weight)
+                scale = Parameter(torch.ones(shape), requires_grad=True)
+                self.register_parameter(f'{size}_scale', scale)
+
+                bias = Parameter(torch.zeros(shape), requires_grad=True)
+                self.register_parameter(f'{size}_bias', bias)
         
         _indices = dict(_indices)
         
@@ -667,6 +578,8 @@ class NormNonlinearityWithBN(EquivariantModule):
         
         self.register_buffer('num_batches_tracked', torch.tensor(0, dtype=torch.long))
         
+
+
         self.eps = eps
         self.momentum = momentum
 
@@ -674,122 +587,98 @@ class NormNonlinearityWithBN(EquivariantModule):
         for s in self._order:
             running_var = getattr(self, f"{s}_running_var")
             running_var.fill_(1)
+            
+            running_mean = getattr(self, f"{s}_running_mean")
+            running_mean.fill_(0) 
         self.num_batches_tracked.zero_()
 
     def reset_parameters(self):
-        self.reset_running_stats()
-        for s in self._order:
-            weight = getattr(self, f"{s}_weight")
-            weight.data.uniform_()
+            self.reset_running_stats()
+            if self.affine:
+                for s in self._order:
+                    getattr(self, f"{s}_scale").data.fill_(1)
+                    getattr(self, f"{s}_bias").data.fill_(0)
     
     def forward(self, input: GeometricTensor) -> GeometricTensor:
-        r"""
-        Apply norm non-linearities to the input feature map
-        
-        Args:
-            input (GeometricTensor): the input feature map
-
-        Returns:
-            the resulting feature map
-            
-        """
-        
         assert input.type == self.in_type
 
         exponential_average_factor = 0.0
-
         if self.training:
             self.num_batches_tracked += 1
-            if self.momentum is None:  # use cumulative moving average
+            if self.momentum is None: 
                 exponential_average_factor = 1.0 / self.num_batches_tracked.item()
-            else:  # use exponential moving average
+            else: 
                 exponential_average_factor = self.momentum
 
-        # compute the squares of the values of each channel
-        # n = torch.mul(input.tensor, input.tensor)
-        n = input.tensor.detach()**2
-
-        b, c = input.tensor.shape[:2]
-        shape = input.tensor.shape[2:]
-
-        output = input.tensor.clone()
-        
-        if self.training:
-            
-            # self.running_var *= 1 - exponential_average_factor
-            
-            next_var = 0
-            # iterate through all field sizes
-            for s in self._order:
-                indices = getattr(self, f"{s}_indices")
-                running_var = getattr(self, f"{s}_running_var")
-                
-                # compute the norm squared of the fields
-                
-                if self._contiguous[s]:
-                    # if the fields were contiguous, we can use slicing
-
-                    # compute the norm of each field by summing the squares
-                    norms = n[:, indices[0]:indices[1], ...] \
-                        .view(b, -1, s, *shape) \
-                        .sum(dim=2, keepdim=False) #.sqrt()
-                else:
-                    # otherwise we have to use indexing
-            
-                    # compute the norm of each field by summing the squares
-                    norms = n[:, indices, ...] \
-                        .view(b, -1, s, *shape) \
-                        .sum(dim=2, keepdim=False) #.sqrt()
-                
-                # Since the mean of the fields is 0, we can compute the variance as the mean of the norms squared
-                # corrected with Bessel's correction
-                norms = norms.transpose(0, 1).reshape(self._nfields[s], -1)
-                correction = norms.shape[1]/(norms.shape[1]-1) if norms.shape[1] > 1 else 1
-                vars = norms.mean(dim=1).view(1, -1, 1) / s
-                vars *= correction
-                # vars = norms.transpose(0, 1).reshape(self._nfields[s], -1).var(dim=1)
-        
-                # self.running_var[next_var:next_var + self._nfields[s]] += exponential_average_factor * vars
-                running_var *= 1 - exponential_average_factor
-                running_var += exponential_average_factor * vars #.detach()
-
-                next_var += self._nfields[s]
-
-            # self.running_var = self.running_var.detach()
-            
-        next_var = 0
+        x = input.tensor
+        b, c = x.shape[:2]
+        data_shape = x.shape[2:]
+        output = x.clone()
         
         # iterate through all field sizes
-        for s in self._order:
+        for r_size in self._order:
+            indices = getattr(self, f"{r_size}_indices")
+            running_var = getattr(self, f"{r_size}_running_var")
+            running_mean = getattr(self, f"{r_size}_running_mean")
     
-            indices = getattr(self, f"{s}_indices")
+            if self._contiguous[r_size]:
+                selected = x[:, indices[0]:indices[1], ...]
+            else:
+                selected = x[:, indices, ...]
+
+            norms = selected.pow(2).reshape(b, -1, r_size, *data_shape) \
+                                .sum(dim=2, keepdim=False).add(self.eps).sqrt()
             
-            # retrieve the running variances corresponding to the current fields
-            # vars = self.running_var[next_var:next_var + self._nfields[s]].view(1, -1, 1, 1, 1)
-            # weight = self.weight[next_var:next_var + self._nfields[s]].view(1, -1, 1, 1, 1)
-            vars = getattr(self, f"{s}_running_var")
-            
+            if self.training:
+                norms_flat = norms.transpose(0, 1).reshape(self._nfields[r_size], -1)
+                means = norms_flat.mean(dim=1, keepdim=False)
+                # Use unbiased var if batch size > 1
+                vars = norms_flat.var(dim=1, unbiased=(norms_flat.shape[1] > 1), keepdim=False)
+
+                with torch.no_grad():
+                    running_var.mul_(1 - exponential_average_factor).add_(vars, alpha=exponential_average_factor)
+                    running_mean.mul_(1 - exponential_average_factor).add_(means, alpha=exponential_average_factor)
+            else:
+                vars = running_var
+                means = running_mean
             if self.affine:
-                weight = getattr(self, f"{s}_weight")
+                # scale.shape = (n_channels,)
+                scale = getattr(self, f"{r_size}_scale")
+                # bias.shape = (n_channels,)
+                bias = getattr(self, f"{r_size}_bias")
             else:
-                weight = 1.
+                scale = 1.
+                bias = 0.
             
-            # compute the scalar multipliers needed
-            multipliers = weight / (vars + self.eps).sqrt()
+
+            pre_expand_shape = (1, -1, *([1] * len(data_shape)))
+            target_shape = (b, self._nfields[r_size], *([1] * len(data_shape)))
             
-            # expand the multipliers tensor to all channels for each field
-            multipliers = multipliers.expand(b, -1, s).reshape(b, -1, *[1]*len(shape))
+            # against tiny variances
+            vars_safe = vars.clamp_min(self.eps)
+            multipliers = (scale / vars_safe.sqrt()).reshape(pre_expand_shape).expand(target_shape)
+            means_expanded = means.reshape(pre_expand_shape).expand(target_shape)
+            bias_expanded = bias if isinstance(bias, float) else bias.reshape(pre_expand_shape).expand(target_shape)
+
+            # batch-norm the norms and apply ReLU to zero out negative norms
+            norm_bn = self._relu((norms - means_expanded) * multipliers + bias_expanded)
+
+            # rescale vectors to the new norms; avoid division by zero
+
+            safe_norms = norms.clamp_min(self.eps)
+            scale_factor = norm_bn / safe_norms
             
-            if self._contiguous[s]:
-                # if the fields are contiguous, we can use slicing
-                output[:, indices[0]:indices[1], ...] *= multipliers
+            scale_factor = scale_factor.masked_fill(norms <= self.eps, 0.0)
+            
+            # Reshape scale factor to match vector dimensions: (B, N_fields, r_size, H, W)
+            scale_factor = scale_factor.unsqueeze(2).expand(b, self._nfields[r_size], r_size, *data_shape)
+            scale_factor = scale_factor.reshape(b, -1, *data_shape)
+            scaled = selected * scale_factor
+            if self._contiguous[r_size]:
+                output[:, indices[0]:indices[1], ...] = scaled
             else:
-                # otherwise we have to use indexing
-                output[:, indices, ...] *= multipliers
-            
-            # shift the position on the running_var and weight tensors
-            next_var += self._nfields[s]
-        
+                output[:, indices, ...] = scaled
+                    
         # wrap the result in a GeometricTensor
         return GeometricTensor(output, self.out_type, input.coords)
 
@@ -803,102 +692,7 @@ class NormNonlinearityWithBN(EquivariantModule):
 
         return (b, self.out_type.size, *spatial_shape)
 
-    def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-5) -> List[Tuple[Any, float]]:
-        # return super(NormBatchNorm, self).check_equivariance(atol=atol, rtol=rtol)
-        pass
-
     
-    def forward(self, input: GeometricTensor) -> GeometricTensor:
-        r"""
-        Apply norm non-linearities to the input feature map
-        
-        Args:
-            input (GeometricTensor): the input feature map
-
-        Returns:
-            the resulting feature map
-            
-        """
-        
-        assert input.type == self.in_type
-
-        coords = input.coords
-        input = input.tensor
-        
-        # scalar multipliers needed to turn the old norms into the newly computed ones
-        multipliers = torch.empty_like(input)
-
-        b, c = input.shape[:2]
-        spatial_dims = input.shape[2:]
-
-        next_bias = 0
-        
-        if self.log_bias is not None:
-            # build the bias
-            # biases = torch.nn.functional.elu(self.log_bias)
-            biases = torch.exp(self.log_bias)
-            # biases = torch.nn.functional.elu(self.log_bias) + 1
-        else:
-            biases = None
-        
-        # iterate through all field sizes
-        for s in self._order:
-            
-            # retrieve the corresponding fiber indices
-            indices = getattr(self, f"indices_{s}")
-            
-            if self._contiguous[s]:
-                # if the fields were contiguous, we can use slicing
-                # retrieve the fields
-                fm = input[:, indices[0]:indices[1], ...]
-            else:
-                # otherwise we have to use indexing
-                # retrieve the fields
-                fm = input[:, indices, ...]
-
-            # compute the norm of each field
-            norms = fm.view(b, -1, s, *spatial_dims).norm(dim=2, keepdim=True)
-            
-            # compute the new norms
-            if biases is not None:
-                # retrieve the bias elements corresponding to the current fields
-                bias = biases[:, next_bias:next_bias + self._nfields[s], ...].view(1, -1, 1, *[1]*len(spatial_dims))
-                new_norms = self._function(norms - bias)
-            else:
-                new_norms = self._function(norms)
-
-            # compute the scalar multipliers needed to turn the old norms into the newly computed ones
-            # m = torch.zeros_like(new_norms)
-            # in order to avoid division by 0
-            # mask = norms > 0.
-            # m[mask] = new_norms[mask] / norms[mask]
-            
-            m = new_norms / torch.max(norms, self.eps)
-            m[norms <= self.eps] = 0.
-
-            if self._contiguous[s]:
-                # expand the multipliers tensor to all channels for each field
-                multipliers[:, indices[0]:indices[1], ...] = m.expand(b, -1, s, *spatial_dims).reshape(b, -1, *spatial_dims)
-            
-            else:
-                # expand the multipliers tensor to all channels for each field
-                multipliers[:, indices, ...] = m.expand(b, -1, s, *spatial_dims).reshape(b, -1, *spatial_dims)
-            
-            # shift the position on the bias tensor
-            next_bias += self._nfields[s]
-        
-        # multiply the input by the multipliers computed and wrap the result in a GeometricTensor
-        return GeometricTensor(input * multipliers, self.out_type, coords)
-
-    def evaluate_output_shape(self, input_shape: Tuple[int, ...]) -> Tuple[int, ...]:
-
-        assert len(input_shape) >= 2
-        assert input_shape[1] == self.in_type.size
-
-        b, c = input_shape[:2]
-        spatial_shape = input_shape[2:]
-
-        return (b, self.out_type.size, *spatial_shape)
 
     def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-5) -> List[Tuple[Any, float]]:
     
