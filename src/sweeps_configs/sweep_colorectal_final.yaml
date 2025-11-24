@@ -11,9 +11,9 @@ parameters:
   dataset:
     values: ["colorectal_hist"]
   activation_type:
-    values: ["gated_sigmoid", "gated_shared_sigmoid", "norm_squash"]
+    values: ["normbn_relu"]
   bn:
-    values: ["Normbn", "IIDbn"]
+    values: ["Normbn"]
   seed:
     values: [0, 1, 2, 3, 4]            # validate best config with multiple seeds
     # values: [0, 1, 2, 3, 4,]

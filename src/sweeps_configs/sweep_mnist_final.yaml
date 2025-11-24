@@ -11,11 +11,11 @@ parameters:
   dataset:
     values: ["mnist_rot"]
   activation_type:
-    values: ["norm_relu", "fourier_elu_16", "gated_sigmoid", "gated_shared_sigmoid", "norm_squash", "fourier_elu_32"]
+    values: ["normbn_relu"]
   bn:
-    values: ["Normbn", "IIDbn"]
+    values: ["Normbn"]
   seed:
-    values: [0, 1, 2, 3, 4]            # validate best config with multiple seeds
+    values: [0, 1, 2, 3, 4]
     # values: [0, 1, 2, 3, 4,]
   max_rot_order:
     value: 3
