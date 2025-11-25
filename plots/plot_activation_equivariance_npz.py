@@ -61,6 +61,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="When set, include flip=True groups; otherwise both flip/no-flip are plotted if present.",
     )
+    parser.add_argument(
+        "--y-max",
+        type=float,
+        default=None,
+        help="Optional fixed upper bound for y-axis (lower bound is 0). If omitted, scales per plot.",
+    )
     return parser.parse_args()
 
 
@@ -120,6 +126,8 @@ def _plot_group(
     key: Tuple,
     entries: List[Tuple[str, Path]],
     output_dir: Path,
+    *,
+    y_max: float | None,
 ) -> Path | None:
     dataset, activation, normalization, flip = key
     colors = {"first": "C0", "middle": "C1", "last": "C2"}
@@ -129,8 +137,22 @@ def _plot_group(
     theta_ref = None
     label_seen = set()
 
+    def _wrap(theta: np.ndarray, mean: np.ndarray, std: np.ndarray | None):
+        if theta.size == 0 or mean.size == 0:
+            return theta, mean, std
+        needs_wrap = not np.isclose(theta[-1], theta[0]) and not np.isclose(theta[-1] - theta[0], 2 * np.pi)
+        if not needs_wrap:
+            return theta, mean, std
+        theta_w = np.concatenate([theta, theta[:1] + 2 * np.pi])
+        mean_w = np.concatenate([mean, mean[:1]])
+        std_w = None
+        if std is not None and std.size != 0:
+            std_w = np.concatenate([std, std[:1]])
+        return theta_w, mean_w, std_w
+
     for position, path in sorted(entries, key=lambda t: t[0]):
         theta, mean, std, meta = _load_npz(path)
+        theta, mean, std = _wrap(theta, mean, std)
         theta_pi = theta / np.pi
         theta_ref = theta_ref if theta_ref is not None else theta_pi
         color = colors.get(position, None)
@@ -147,6 +169,7 @@ def _plot_group(
 
     plt.xlabel(r"Rotation angle ($\pi$ units)")
     plt.ylabel("Relative equivariance error")
+    plt.ylim(bottom=0.0, top=y_max if y_max is not None else None)
     flip_suffix = "flip" if flip else "noflip"
     plt.title(f"{dataset} | {activation} / {normalization} | {flip_suffix}")
     plt.grid(True, linestyle="--", alpha=0.3)
@@ -174,7 +197,7 @@ def main() -> None:
 
     saved: List[Path] = []
     for key, entries in grouped.items():
-        out = _plot_group(key, entries, output_dir)
+        out = _plot_group(key, entries, output_dir, y_max=args.y_max)
         if out:
             saved.append(out)
 
