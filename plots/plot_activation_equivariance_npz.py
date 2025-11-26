@@ -175,7 +175,7 @@ def _plot_group(
     plt.grid(True, linestyle="--", alpha=0.3)
     plt.legend()
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = f"{dataset}_{activation}_{normalization}_{flip_suffix}.png".replace("/", "-")
+    safe_name = f"{dataset}_{activation}_{normalization}_{flip_suffix}.pdf".replace("/", "-")
     out_path = output_dir / safe_name
     plt.tight_layout()
     plt.savefig(out_path)
