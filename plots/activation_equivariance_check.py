@@ -307,6 +307,7 @@ def _activation_equivariance_from_feature(
     if not isinstance(feature, nn.GeometricTensor):
         feature = nn.GeometricTensor(feature, activation_module.in_type)  # type: ignore[arg-type]
     base = activation_module(feature)
+    
     if not isinstance(base, nn.GeometricTensor):
         raise TypeError("Activation module must return a GeometricTensor.")
 
@@ -358,6 +359,9 @@ def _activation_curves_from_model(
         raise ValueError(f"Could not capture features for activation indices: {sorted(missing)}")
 
     curves: Dict[int, np.ndarray] = {}
+    for idx in target_indices:
+        print(pre_features[idx].type)
+        print(pre_features[idx].shape)
     for idx in target_indices:
         curves[idx] = _activation_equivariance_from_feature(
             pre_features[idx], layers[idx], elems, chunk_size
@@ -566,6 +570,7 @@ def generate_activation_equivariance_data(
         )
 
         lit_model = LitHnn.load_from_checkpoint(first_entry["path"], map_location=device_obj)
+        print(first_entry)
         activation = _get_hparam(lit_model.hparams, "activation_type", act_hint)
         normalization = _get_hparam(lit_model.hparams, "bn", norm_hint)
         flip_flag = bool(_get_hparam(lit_model.hparams, "flip", flip_hint))
