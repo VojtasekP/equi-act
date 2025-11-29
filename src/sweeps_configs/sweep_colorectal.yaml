@@ -72,7 +72,11 @@ parameters:
     max: 0.001
 
   weight_decay:
-    value: 0.001
+    values:
+    - 0
+    - 0.0001
+    - 0.005
+    - 0.001
   burin_in_period:
     value: 5
   batch_size:

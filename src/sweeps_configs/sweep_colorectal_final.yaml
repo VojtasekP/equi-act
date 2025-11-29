@@ -73,14 +73,12 @@ parameters:
     value: 0.005
   burin_in_period:
     value: 5
-  exp_dump:
-    value: 0.9
   batch_size:
     value: 32
   epochs:
     value: 80
   patience:
-    value: 60
+    value: 80
   img_size:
     value: 150
   precision:
