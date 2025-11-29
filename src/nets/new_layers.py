@@ -261,8 +261,8 @@ class AdaptiveFourierPointwiseSO2(torch.nn.Module):
         return np.concatenate(errors).reshape(-1)
 
 
-
-class FourierPointwiseInnerBn(torch.nn.Module):
+'''
+class FourierPointwiseInnerBn(EquivariantModule):
 
 
     def __init__(self, in_type: FieldType):
@@ -283,56 +283,10 @@ class FourierPointwiseInnerBn(torch.nn.Module):
             normalize: bool = True,
             **grid_kwargs
     ):
-        r"""
-        
-        Applies a Inverse Fourier Transform to sample the input features, apply the pointwise non-linearity in the
-        group domain (Dirac-delta basis) and, finally, computes the Fourier Transform to obtain irreps coefficients.
-        
-        .. warning::
-            This operation is only *approximately* equivariant and its equivariance depends on the sampling grid and the
-            non-linear activation used, as well as the original band-limitation of the input features.
-            
-        The same function is applied to every channel independently.
-        By default, the input representation is preserved by this operation and, therefore, it equals the output
-        representation.
-        Optionally, the output can have a different band-limit by using the argument ``out_irreps``.
-        
-        The class first constructs a band-limited regular representation of ```gspace.fibergroup``` using
-        :meth:`escnn.group.Group.spectral_regular_representation`.
-        The band-limitation of this representation is specified by ```irreps``` which should be a list containing
-        a list of ids identifying irreps of ```gspace.fibergroup``` (see :attr:`escnn.group.IrreducibleRepresentation.id`).
-        This representation is used to define the input and output field types, each containing ```channels``` copies
-        of a feature field transforming according to this representation.
-        A feature vector transforming according to such representation is interpreted as a vector of coefficients
-        parameterizing a function over the group using a band-limited Fourier basis.
-
-        .. note::
-            Instead of building the list ``irreps`` manually, most groups implement a method ``bl_irreps()`` which can be
-            used to generate this list with through a simpler interface. Check each group's documentation.
-        
-        To approximate the Fourier transform, this module uses a finite number of samples from the group.
-        The set of samples used is specified by the ```grid_args``` and ```grid_kwargs``` which are forwarded to
-        the method :meth:`~escnn.group.Group.grid`.
-        
-        Args:
-            gspace (GSpace):  the gspace describing the symmetries of the data. The Fourier transform is
-                              performed over the group ```gspace.fibergroup```
-            channels (int): number of independent fields in the input `FieldType`
-            irreps (list): list of irreps' ids to construct the band-limited representation
-            function (str): the identifier of the non-linearity.
-                    It is used to specify which function to apply.
-                    By default (``'p_relu'``), ReLU is used.
-            *grid_args: parameters used to construct the discretization grid
-            inplace (bool): applies the non-linear activation in-place. Default: `True`
-            out_irreps (list, optional): optionally, one can specify a different band-limiting in output
-            normalize (bool, optional): if ``True``, the rows of the IFT matrix (and the columns of the FT matrix) are normalized. Default: ``True``
-            **grid_kwargs: keyword parameters used to construct the discretization grid
-            
-        """
 
         assert isinstance(gspace, GSpace)
         
-        super(FourierPointwise, self).__init__()
+        super(FourierPointwiseInnerBn, self).__init__()
 
         self.space = gspace
         
@@ -408,6 +362,8 @@ class FourierPointwiseInnerBn(torch.nn.Module):
 
         self.register_buffer('A', torch.tensor(A, dtype=torch.get_default_dtype()))
         self.register_buffer('Ainv', torch.tensor(Ainv, dtype=torch.get_default_dtype()))
+
+        self.bn = torch.nn.BatchNorm3d(num_features=channels)
         
     def forward(self, input: GeometricTensor) -> GeometricTensor:
         r"""
@@ -425,11 +381,13 @@ class FourierPointwiseInnerBn(torch.nn.Module):
         assert input.type == self.in_type
         
         shape = input.shape
+        # (B, C, r_size, H, W)
         x_hat = input.tensor.view(shape[0], len(self.in_type), self.rho.size, *shape[2:])
         
         x = torch.einsum('bcf...,gf->bcg...', x_hat, self.A)
         
-        y = self._function(x)
+        y = self.bn(x)
+        y = self._function(y)
 
         y_hat = torch.einsum('bcg...,fg->bcf...', y, self.Ainv)
 
@@ -502,10 +460,10 @@ class FourierPointwiseInnerBn(torch.nn.Module):
         return np.concatenate(errors).reshape(-1)
     
 
-'''
+
 class NormNonlinearityWithBN(EquivariantModule):
     
-    def __init__(self, in_type: FieldType, eps=1e-7, momentum=0.1, affine=True):
+    def __init__(self, in_type: FieldType, eps=1e-7, momentum=0.1, affine=True, function: str="relu"):
 
         assert isinstance(in_type.gspace, GSpace)
         
@@ -518,7 +476,14 @@ class NormNonlinearityWithBN(EquivariantModule):
         
         self.affine = affine
 
-        self._relu = torch.nn.ReLU()
+        if function == 'relu':
+            self._function = F.relu
+        elif function == 'elu':
+            self._function = F.elu
+        elif function == 'sigmoid':
+            self._function = torch.sigmoid
+        else:
+            raise ValueError(f'Unknown norm-bn activation "{function}"')
         # group fields by their size and
         #   - check if fields of the same size are contiguous
         #   - retrieve the indices of the fields
@@ -625,11 +590,13 @@ class NormNonlinearityWithBN(EquivariantModule):
                 selected = x[:, indices[0]:indices[1], ...]
             else:
                 selected = x[:, indices, ...]
-
+            # v torchi je norma
+            # (B, channels, size, H, W)
             norms = selected.pow(2).reshape(b, -1, r_size, *data_shape) \
                                 .sum(dim=2, keepdim=False).add(self.eps).sqrt()
             
             if self.training:
+                # (chnnales, B*H*W)
                 norms_flat = norms.transpose(0, 1).reshape(self._nfields[r_size], -1)
                 means = norms_flat.mean(dim=1, keepdim=False)
                 # Use unbiased var if batch size > 1
@@ -661,14 +628,12 @@ class NormNonlinearityWithBN(EquivariantModule):
             bias_expanded = bias if isinstance(bias, float) else bias.reshape(pre_expand_shape).expand(target_shape)
 
             # batch-norm the norms and apply ReLU to zero out negative norms
-            norm_bn = self._relu((norms - means_expanded) * multipliers + bias_expanded)
+            norm_bn = self._function((norms - means_expanded) * multipliers + bias_expanded)
 
             # rescale vectors to the new norms; avoid division by zero
 
-            safe_norms = norms.clamp_min(self.eps)
-            scale_factor = norm_bn / safe_norms
+            scale_factor = norm_bn / norms
             
-            scale_factor = scale_factor.masked_fill(norms <= self.eps, 0.0)
             
             # Reshape scale factor to match vector dimensions: (B, N_fields, r_size, H, W)
             scale_factor = scale_factor.unsqueeze(2).expand(b, self._nfields[r_size], r_size, *data_shape)

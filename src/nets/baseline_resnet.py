@@ -14,7 +14,6 @@ class LitResNet18(L.LightningModule):
         weight_decay: float = 1e-4,
         epochs: int = 100,
         burin_in_period: int = 5,
-        exp_dump: float = 0.9,
         in_channels: int = 3,
         pretrained: bool = False,
     ):
@@ -24,7 +23,6 @@ class LitResNet18(L.LightningModule):
         self.weight_decay = weight_decay
         self.epochs = epochs
         self.burn_in_period = burin_in_period
-        self.exp_dump = exp_dump
 
         weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = models.resnet18(weights=weights)
@@ -84,15 +82,24 @@ class LitResNet18(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        # Linear warmup into cosine decay.
+        warmup = optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=0.1,
+            end_factor=1.0,
+            total_iters=max(1, self.burn_in_period),
+        )
+        cosine = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(1, self.epochs - self.burn_in_period),
+            eta_min=0.0,
+        )
         scheduler = optim.lr_scheduler.SequentialLR(
             optimizer,
-            schedulers=[
-                optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=self.burn_in_period),
-                optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.exp_dump),
-            ],
+            schedulers=[warmup, cosine],
             milestones=[self.burn_in_period],
         )
         return {
             "optimizer": optimizer,
-            "lr_scheduler": {"scheduler": scheduler, "monitor": "val_loss"},
+            "lr_scheduler": {"scheduler": scheduler, "monitor": "val_loss", "interval": "epoch"},
         }

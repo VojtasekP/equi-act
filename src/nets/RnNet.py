@@ -4,7 +4,7 @@ from typing import List, Tuple, Optional
 from escnn.group import directsum
 from nets.calculate_channels import adjust_channels
 from abc import ABC, abstractmethod
-from nets.new_layers import NormNonlinearityWithBN
+from nets.new_layers import NormNonlinearityWithBN, FourierPointwiseInnerBn
 ACT_MAP = {
     "norm_relu": "n_relu",
     "norm_sigmoid": "n_sigmoid",
@@ -18,7 +18,14 @@ ACT_MAP = {
     "gated_shared_sigmoid": "sigmoid",
     "non_equi_relu": "p_relu",
     "non_equi_bn": "sigmoid",
-    "normbn_relu": "relu"
+    "normbn_relu": "relu",
+    "normbn_elu": "elu",
+    "normbn_sigmoid": "sigmoid",
+    "normbnvec_relu": "relu",
+    "normbnvec_elu": "elu",
+    "normbnvec_sigmoid": "sigmoid",
+    "fourierbn_relu":"p_relu",
+    "fourierbn_elu":"p_elu"
 }
 
 BN_MAP_2d = {
@@ -81,6 +88,30 @@ class NonEquivariantTorchOp(nn.EquivariantModule):
 
     def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-6):
         return False
+
+
+class ResidualBlock(nn.EquivariantModule):
+    """
+    Wrap a main equivariant branch with an optional skip mapping (1x1 conv) to enable residual connections.
+    """
+    def __init__(self, main: nn.SequentialModule, skip: nn.EquivariantModule | None = None):
+        super().__init__()
+        self.main = main
+        self.skip = skip
+        self.in_type = main.in_type
+        self.out_type = main.out_type
+
+    def forward(self, input: nn.GeometricTensor) -> nn.GeometricTensor:
+        y = self.main(input)
+        shortcut = input if self.skip is None else self.skip(input)
+        assert shortcut.type == y.type, "Residual shortcut and main branch must produce the same type"
+        return nn.GeometricTensor(shortcut.tensor + y.tensor, y.type)
+
+    def evaluate_output_shape(self, input_shape):
+        return self.main.evaluate_output_shape(input_shape)
+
+    def check_equivariance(self, atol: float = 1e-6, rtol: float = 1e-6):
+        return self.main.check_equivariance(atol, rtol)
     
 class RnNet(ABC, torch.nn.Module):
     def __init__(self,
@@ -99,7 +130,8 @@ class RnNet(ABC, torch.nn.Module):
                  invariant_channels=64,
                  bn="IIDbn",
                  grid_size=29,
-                 mnist=False):
+                 mnist=False,
+                 residual: bool = False):
         super().__init__()
 
         assert hasattr(self, "r2_act"), "Subclass must set self.r2_act before calling RnNet.__init__"
@@ -113,14 +145,14 @@ class RnNet(ABC, torch.nn.Module):
 
         self.mnist = mnist
 
-        if activation_type.split("_")[0] in ["fourier"]:
+        if activation_type.split("_")[0] in ["fourier", "fourierbn"]:
             #remove the last _n
             self.N=int(activation_type.split("_")[-1])
             activation_type = "_".join(activation_type.split("_")[:-1])
         self.activation_type = activation_type
         # here might confusion arise as we added non_equi_bn to activation types, even that it is gated sigmoid with classical nonequi batch norm. This decision was made purly out of implementational ease
         
-        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu", "gated_shared_sigmoid", "non_equi_relu", "non_equi_bn", "normbn_relu"]
+        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu", "gated_shared_sigmoid", "non_equi_relu", "non_equi_bn", "normbn_relu", "normbn_elu", "normbn_sigmoid", "normbnvec_relu", "normbnvec_elu", "normbnvec_sigmoid",  "fourierbn_elu", "fourierbn_relu"]
         if activation_type == "gated_sigmoid":
             build_layer = self.make_gated_block
         elif activation_type in ["norm_relu", "norm_squash", "norm_sigmoid"]:
@@ -133,8 +165,12 @@ class RnNet(ABC, torch.nn.Module):
             build_layer = self.make_non_equi_layer_nonlin
         elif activation_type == "non_equi_bn":
             build_layer = self.make_non_equi_layer_bn
-        elif activation_type == "normbn_relu":
+        elif activation_type in ["normbn_relu", "normbn_elu", "normbn_sigmoid"]:
             build_layer = self.make_normbn_relu_block
+        elif activation_type in ["fourierbn_elu", "fourierbn_relu"]:
+            build_layer = self.make_fourierbn_block
+        elif activation_type in ["normbnvec_relu", "normbnvec_elu", "normbnvec_sigmoid"]:
+            build_layer = self.make_normbn_relu_only_on_vec_block
         self.non_linearity = self._create_fund_non_linearity(activation_type) # determines the non-linearity used in norm and fourier blocks, gated is fixed on relu
 
         self.mask = nn.MaskModule(self.input_type, grid_size, margin=1)
@@ -148,6 +184,7 @@ class RnNet(ABC, torch.nn.Module):
         self.pool_type = pool_type
         self.pool_sigma = pool_sigma
         self.pool_stride = self.pool_size
+        self.use_residual = residual
 
         self.LAYER = 0
         self.LAYERS_NUM = len(channels_per_block)
@@ -156,8 +193,17 @@ class RnNet(ABC, torch.nn.Module):
         for i, (channels, kernel, padding) in enumerate(zip(channels_per_block, kernels_per_block, paddings_per_block)):
 
             self.LAYER += 1
-            eq_layers += build_layer(cur_type, channels, kernel, padding)
-            cur_type = eq_layers[-1].out_type
+            block_modules = build_layer(cur_type, channels, kernel, padding)
+            block_seq = nn.SequentialModule(*block_modules)
+            if self.use_residual and (i + 1) % 2 == 0:
+                skip = None
+                if block_seq.in_type != block_seq.out_type:
+                    skip = nn.R2Conv(block_seq.in_type, block_seq.out_type, kernel_size=1, padding=0, sigma=self.conv_sigma, bias=False)
+                block = ResidualBlock(block_seq, skip)
+            else:
+                block = block_seq
+            eq_layers.append(block)
+            cur_type = block.out_type
 
             if (i + 1) % pool_after_every_n_blocks == 0 and (i + 1) != self.LAYERS_NUM:
                 eq_layers += self._build_pooling(eq_layers[-1].out_type)
@@ -168,6 +214,7 @@ class RnNet(ABC, torch.nn.Module):
         self.invar_map = self._build_invariant_map(eq_layers[-1].out_type)
 
         self.pool = nn.PointwiseAdaptiveMaxPool(self.invar_map.out_type, (1, 1))
+        # (B, )
         invariant_size = len(self.invar_map.out_type)
 
         self.eq_layers = nn.SequentialModule(*eq_layers)
@@ -219,6 +266,15 @@ class RnNet(ABC, torch.nn.Module):
     @abstractmethod
     def make_normbn_relu_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
         pass
+
+    @abstractmethod
+    def make_normbn_relu_only_on_vec_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        pass
+    
+    @abstractmethod
+    def make_fourierbn_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        pass
+
     def forward(self, input: torch.Tensor):
 
         x = nn.GeometricTensor(input, self.input_type)
@@ -299,7 +355,8 @@ class R2Net(RnNet):
                  bn="IIDbn",
                  img_size=29,
                  grey_scale=False,
-                 mnist=False):
+                 mnist=False,
+                 residual: bool = False):
         assert bn in ["IIDbn", "Normbn", "FieldNorm", "GNormBatchNorm"]
 
         if flip:
@@ -330,7 +387,8 @@ class R2Net(RnNet):
                          invariant_channels=invariant_channels,
                          bn=bn,
                          grid_size=img_size,
-                         mnist=mnist)
+                         mnist=mnist,
+                         residual=residual)
 
     def _create_bn(self):
         try:
@@ -431,8 +489,203 @@ class R2Net(RnNet):
 
 
         return layers
+
+
+    
+    def make_gated_block_shared(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        layers = []
+        channels = adjust_channels(channels, 
+                                self.r2_act,
+                                kernel_size,
+                                activation_type=self.activation_type,
+                                layer_index=self.LAYER,
+                                last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                max_frequency=self.max_rot_order,
+                                mnist=self.mnist)
+        vector_rep = []
+        for irr in self.r2_act.irreps:
+            if irr.is_trivial():
+                continue
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            vector_rep.extend([irr] * mult)
+
+
+        scalar_rep = [self.r2_act.trivial_repr] * channels
+        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
+
+        vec_rep_dirsum= directsum(vector_rep, name="vec")
+        vector_field = nn.FieldType(self.r2_act, [vec_rep_dirsum] * channels)
+
+        gates = nn.FieldType(self.r2_act, scalar_rep)
+
+        gate_field = (gates + vector_field)
+
+        full_field = (scalar_field + gate_field)
+        layers.append(
+            nn.R2Conv(in_type, full_field, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma)
+        )
+
+        layers.append(self._build_batch_norm(layers[-1].out_type))
+        
+        # nelinearity: ELU na scalars, GatedNL na (gates ⊕ vector), gates po NL dropneme
+        non_linearity = nn.MultipleModule(
+            in_type=full_field,
+            labels=["scalar"] * len(scalar_field) + ["gate"] * len(gate_field),
+            modules=[
+                (nn.ELU(scalar_field), "scalar"),
+                (nn.GatedNonLinearity1(gate_field), "gate"),
+            ],
+            reshuffle=0
+        )
+        layers.append(non_linearity)
+
+
+        return layers
+    def make_norm_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        layers = []
+        channels = adjust_channels(channels, 
+                                self.r2_act,
+                                kernel_size,
+                                activation_type=self.activation_type,
+                                layer_index=self.LAYER,
+                                last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                max_frequency=self.max_rot_order,
+                                mnist=self.mnist)
+        vector_rep = []
+        for irr in self.r2_act.irreps:
+            if irr.is_trivial():
+                continue
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            vector_rep.extend([irr] * mult)
+        scalar_rep = [self.r2_act.trivial_repr] * channels
+        vector_rep = vector_rep*channels
+        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
+        vector_field = nn.FieldType(self.r2_act, vector_rep)
+        feat_type_out = scalar_field + vector_field
+
+        bias = True if self.non_linearity in ['n_relu', 'n_softplus'] else False
+
+        layers.append(nn.R2Conv(in_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma))
+
+        elu = nn.ELU(scalar_field)
+        norm_nonlin = nn.NormNonLinearity(in_type=vector_field, function=self.non_linearity, bias=bias)
+
+        layers.append(self._build_batch_norm(layers[-1].out_type))
+
+        non_linearity = nn.MultipleModule(in_type=feat_type_out, 
+                                            labels=['scalar']*len(scalar_rep) + ['vector']*len(vector_rep), 
+                                            modules=[(elu,'scalar'), (norm_nonlin, 'vector')]
+                                            )
+
+        layers.append(non_linearity)
+
+        return layers
+    
+    def make_fourier_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        layers = []
+        channels = adjust_channels(channels, 
+                                self.r2_act,
+                                kernel_size,
+                                activation_type=self.activation_type,
+                                layer_index=self.LAYER,
+                                last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                max_frequency=self.max_rot_order,
+                                mnist=self.mnist)
+        reps = []
+        for irr in self.r2_act.irreps:
+
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            reps.extend([irr] * mult)
+
+        full_rep = reps * channels
+        base_field = nn.FieldType(self.r2_act, full_rep)
+        G = in_type.fibergroup
+        activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=self.N)
+        feat_type_out = activation.in_type
+
+        conv = nn.R2Conv(in_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma)
+        layers.append(conv)
+
+        layers.append(RetypeModule(conv.out_type, base_field))
+
+        bn_module = self._build_batch_norm(base_field)
+        layers.append(bn_module)
+
+        trivial_indices = [i for i, rep in enumerate(base_field) if rep.is_trivial()]
+        other_indices = [i for i, rep in enumerate(base_field) if not rep.is_trivial()]
+        bn_order = trivial_indices + other_indices
+        restore_positions = {idx: pos for pos, idx in enumerate(bn_order)}
+        restore_perm = [restore_positions[i] for i in range(len(base_field))]
+        if restore_perm != list(range(len(base_field))):
+            layers.append(nn.ReshuffleModule(bn_module.out_type, restore_perm))
+
+        layers.append(RetypeModule(base_field, feat_type_out))
+
+        layers.append(activation)
+
+        layers.append(RetypeModule(feat_type_out, base_field))
+        return layers
+    
+    def make_fourierbn_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        layers = []
+        channels = adjust_channels(channels, 
+                                self.r2_act,
+                                kernel_size,
+                                activation_type=self.activation_type,
+                                layer_index=self.LAYER,
+                                last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                max_frequency=self.max_rot_order,
+                                mnist=self.mnist)
+        reps = []
+        for irr in self.r2_act.irreps:
+
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            reps.extend([irr] * mult)
+        full_rep = reps * channels
+        base_field = nn.FieldType(self.r2_act, full_rep)
+        G = in_type.fibergroup
+        activation = FourierPointwiseInnerBn(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=self.N)
+        feat_type_out = activation.in_type
+
+        conv = nn.R2Conv(in_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma)
+        layers.append(conv)
+
+        layers.append(activation)
+        layers.append(RetypeModule(feat_type_out, base_field))
+        return layers
     
     def make_normbn_relu_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
+        layers = []
+        channels = adjust_channels(channels, 
+                                self.r2_act,
+                                kernel_size,
+                                activation_type=self.activation_type,
+                                layer_index=self.LAYER,
+                                last_layer=True if self.LAYER == self.LAYERS_NUM else False,
+                                max_frequency=self.max_rot_order,
+                                mnist=self.mnist)
+        vector_rep = []
+        for irr in self.r2_act.irreps:
+            if irr.is_trivial():
+                continue
+            mult = int(irr.size // irr.sum_of_squares_constituents)
+            vector_rep.extend([irr] * mult)
+        scalar_rep = [self.r2_act.trivial_repr] * channels
+        vector_rep=vector_rep*channels
+        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
+        vector_field = nn.FieldType(self.r2_act, vector_rep)
+        feat_type_out = scalar_field + vector_field
+
+        conv = nn.R2Conv(in_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma, bias=True)
+        layers.append(conv)
+
+        non_linearity = NormNonlinearityWithBN(in_type=feat_type_out, function=self.non_linearity)
+
+
+        layers.append(non_linearity)
+        return layers
+
+    def make_normbn_relu_only_on_vec_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
         layers = []
         channels = adjust_channels(channels, 
                                 self.r2_act,
@@ -457,17 +710,15 @@ class R2Net(RnNet):
         layers.append(conv)
 
         innerbn_elu = nn.SequentialModule(nn.InnerBatchNorm(scalar_field), nn.ELU(scalar_field))
-        non_linearity = NormNonlinearityWithBN(in_type=feat_type_out)
+        norm_nonlinbn = NormNonlinearityWithBN(in_type=vector_field, function=self.non_linearity)
 
 
-        # non_linearity = nn.MultipleModule(in_type=feat_type_out, 
-        #                                     labels=['scalar']*len(scalar_rep) + ['vector']*len(vector_rep), 
-        #                                     modules=[(innerbn_elu,'scalar'), (norm_nonlin, 'vector')]
-        #                                     )
+        non_linearity = nn.MultipleModule(in_type=feat_type_out, 
+                                            labels=['scalar']*len(scalar_rep) + ['vector']*len(vector_rep), 
+                                            modules=[(innerbn_elu,'scalar'), (norm_nonlinbn, 'vector')]
+                                            )
 
         layers.append(non_linearity)
-
-
 
         return layers
     def make_non_equi_layer_nonlin(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
@@ -536,138 +787,6 @@ class R2Net(RnNet):
             reshuffle=0
         )
         layers.append(non_linearity)
-        return layers
-    
-    def make_gated_block_shared(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
-        layers = []
-        channels = adjust_channels(channels, 
-                                self.r2_act,
-                                kernel_size,
-                                activation_type=self.activation_type,
-                                layer_index=self.LAYER,
-                                last_layer=True if self.LAYER == self.LAYERS_NUM else False,
-                                max_frequency=self.max_rot_order,
-                                mnist=self.mnist)
-        vector_rep = []
-        for irr in self.r2_act.irreps:
-            if irr.is_trivial():
-                continue
-            mult = int(irr.size // irr.sum_of_squares_constituents)
-            vector_rep.extend([irr] * mult)
-
-
-        scalar_rep = [self.r2_act.trivial_repr] * channels
-        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
-
-        vec_rep_dirsum= directsum(vector_rep, name="vec")
-        vector_field = nn.FieldType(self.r2_act, [vec_rep_dirsum] * channels)
-
-        gates = nn.FieldType(self.r2_act, scalar_rep)
-
-        gate_field = (gates + vector_field)
-
-        full_field = (scalar_field + gate_field)
-        layers.append(
-            nn.R2Conv(in_type, full_field, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma)
-        )
-
-        layers.append(self._build_batch_norm(layers[-1].out_type))
-        
-        # nelinearity: ELU na scalars, GatedNL na (gates ⊕ vector), gates po NL dropneme
-        non_linearity = nn.MultipleModule(
-            in_type=full_field,
-            labels=["scalar"] * len(scalar_field) + ["gate"] * len(gate_field),
-            modules=[
-                (nn.ELU(scalar_field), "scalar"),
-                (nn.GatedNonLinearity1(gate_field), "gate"),
-            ],
-            reshuffle=0
-        )
-        layers.append(non_linearity)
-
-
-        return layers
-    def make_norm_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
-        layers = []
-        channels = adjust_channels(channels, 
-                                self.r2_act,
-                                kernel_size,
-                                activation_type=self.activation_type,
-                                layer_index=self.LAYER,
-                                last_layer=True if self.LAYER == self.LAYERS_NUM else False,
-                                max_frequency=self.max_rot_order,
-                                mnist=self.mnist)
-        vector_rep = []
-        for irr in self.r2_act.irreps:
-            if irr.is_trivial():
-                continue
-            mult = int(irr.size // irr.sum_of_squares_constituents)
-            vector_rep.extend([irr] * mult* channels)
-        scalar_rep = [self.r2_act.trivial_repr] * channels
-        scalar_field = nn.FieldType(self.r2_act, scalar_rep)
-        vector_field = nn.FieldType(self.r2_act, vector_rep)
-        feat_type_out = scalar_field + vector_field
-
-        bias = True if self.non_linearity in ['n_relu', 'n_softplus'] else False
-
-        layers.append(nn.R2Conv(in_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma))
-
-        elu = nn.ELU(scalar_field)
-        norm_nonlin = nn.NormNonLinearity(in_type=vector_field, function=self.non_linearity, bias=bias)
-
-        layers.append(self._build_batch_norm(layers[-1].out_type))
-
-        non_linearity = nn.MultipleModule(in_type=feat_type_out, 
-                                            labels=['scalar']*len(scalar_rep) + ['vector']*len(vector_rep), 
-                                            modules=[(elu,'scalar'), (norm_nonlin, 'vector')]
-                                            )
-
-        layers.append(non_linearity)
-
-        return layers
-    
-    def make_fourier_block(self, in_type: nn.FieldType, channels: int, kernel_size: int, pad: int):
-        layers = []
-        channels = adjust_channels(channels, 
-                                self.r2_act,
-                                kernel_size,
-                                activation_type=self.activation_type,
-                                layer_index=self.LAYER,
-                                last_layer=True if self.LAYER == self.LAYERS_NUM else False,
-                                max_frequency=self.max_rot_order,
-                                mnist=self.mnist)
-        reps = []
-        for irr in self.r2_act.irreps:
-
-            mult = int(irr.size // irr.sum_of_squares_constituents)
-            reps.extend([irr] * mult)
-        full_rep = reps * channels
-        base_field = nn.FieldType(self.r2_act, full_rep)
-        G = in_type.fibergroup
-        activation = nn.FourierPointwise(self.r2_act, channels=channels, irreps = G.bl_irreps(self.max_rot_order), function=self.non_linearity, N=self.N)
-        feat_type_out = activation.in_type
-
-        conv = nn.R2Conv(in_type, feat_type_out, kernel_size=kernel_size, padding=pad, sigma=self.conv_sigma)
-        layers.append(conv)
-
-        layers.append(RetypeModule(conv.out_type, base_field))
-
-        bn_module = self._build_batch_norm(base_field)
-        layers.append(bn_module)
-
-        trivial_indices = [i for i, rep in enumerate(base_field) if rep.is_trivial()]
-        other_indices = [i for i, rep in enumerate(base_field) if not rep.is_trivial()]
-        bn_order = trivial_indices + other_indices
-        restore_positions = {idx: pos for pos, idx in enumerate(bn_order)}
-        restore_perm = [restore_positions[i] for i in range(len(base_field))]
-        if restore_perm != list(range(len(base_field))):
-            layers.append(nn.ReshuffleModule(bn_module.out_type, restore_perm))
-
-        layers.append(RetypeModule(base_field, feat_type_out))
-
-        layers.append(activation)
-
-        layers.append(RetypeModule(feat_type_out, base_field))
         return layers
     
 class R3Net(RnNet):
