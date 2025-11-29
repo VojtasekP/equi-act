@@ -47,8 +47,6 @@ _DATASET_PREFIXES = [
 _BN_NAMES = {
     "IIDbn",
     "Normbn",
-    "FieldNorm",
-    "GNormBatchNorm",
 }
 
 _METRIC_COLUMNS: Tuple[Tuple[str, int | None], ...] = (

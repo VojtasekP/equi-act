@@ -1,0 +1,23 @@
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{llrrr}
+\toprule
+Activation & BN & Eurosat [\%] & Mnistrot [\%] & Colorectal Hist [\%] \\
+\midrule
+fourier elu 16 & IIDbn & 3.88 ± 0.15 & 1.15 ± 0.06 & 9.65 ± 1.54 \\
+fourier elu 16 & Normbn & 3.87 ± 0.19 & 1.14 ± 0.04 & 9.81 ± 0.99 \\
+gated shared sigmoid & IIDbn & 3.18 ± 0.31 & 1.05 ± 0.04 & 8.43 ± 1.04 \\
+gated shared sigmoid & Normbn & 3.26 ± 0.23 & 1.12 ± 0.09 & 8.27 ± 1.08 \\
+gated sigmoid & IIDbn & 3.14 ± 0.18 & 1.06 ± 0.03 & 8.53 ± 0.84 \\
+gated sigmoid & Normbn & 3.22 ± 0.29 & 1.10 ± 0.03 & 8.80 ± 1.02 \\
+norm relu & IIDbn & 3.97 ± 0.24 & 1.30 ± 0.05 & 7.20 ± 0.68 \\
+norm relu & Normbn & 4.30 ± 0.51 & 1.30 ± 0.03 & 7.09 ± 0.70 \\
+norm squash & IIDbn & 4.10 ± 0.20 & 1.52 ± 0.01 & 8.48 ± 1.04 \\
+norm squash & Normbn & 4.02 ± 0.11 & 1.60 ± 0.11 & 8.37 ± 0.95 \\
+normbn relu & Normbn & 3.97 ± 0.28 & 1.42 ± 0.02 & 7.04 ± 0.90 \\
+\bottomrule
+\end{tabular}
+\caption{Test error (mean $\pm$ std, in percent) per dataset, activation, and normalization.}
+\label{tab:methods-simple}
+\end{table}

@@ -1,0 +1,16 @@
+dataset,activation,normalization,flip,position,mean_error,std_error,num_seeds,num_angles
+mnist_rot,gated_sigmoid,Normbn,False,first,0.021137559163980767,0.00180013165216853,5,32
+mnist_rot,gated_sigmoid,Normbn,False,middle,0.03535765985652688,0.0008044434527880774,5,32
+mnist_rot,gated_sigmoid,Normbn,False,last,3.334025532240048e-05,3.4334292288304727e-07,5,32
+mnist_rot,norm_relu,IIDbn,False,first,0.09441706488032652,0.00363146091461442,5,32
+mnist_rot,norm_relu,IIDbn,False,middle,0.08549791592067776,0.001025564117311955,5,32
+mnist_rot,norm_relu,IIDbn,False,last,4.341699168435298e-05,4.272977246333426e-07,5,32
+mnist_rot,norm_relu,Normbn,False,first,0.08803591967989632,0.0020309438248962723,5,32
+mnist_rot,norm_relu,Normbn,False,middle,0.08382640132531377,0.0016017929275236728,5,32
+mnist_rot,norm_relu,Normbn,False,last,4.272646001481917e-05,7.936733303621597e-07,5,32
+mnist_rot,norm_squash,IIDbn,False,first,0.04483188694521232,0.0007084312337498292,5,32
+mnist_rot,norm_squash,IIDbn,False,middle,0.05084909072456867,0.0014236946025789287,5,32
+mnist_rot,norm_squash,IIDbn,False,last,2.628790298331296e-05,1.394265472736649e-07,5,32
+mnist_rot,norm_squash,Normbn,False,first,0.04494150540422197,0.0010790304265745794,5,32
+mnist_rot,norm_squash,Normbn,False,middle,0.05187508295975932,0.0012965599764383242,5,32
+mnist_rot,norm_squash,Normbn,False,last,2.6035300652438306e-05,3.5334851935379465e-07,5,32
