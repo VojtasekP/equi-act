@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,7 @@ torch.autograd.set_detect_anomaly(True)
 class LitHnn(L.LightningModule):
     def __init__(self,
                  n_classes=10,
+                 dataset: str = "mnist_rot",
                  max_rot_order=2,
                  flip=False,
                  channels_per_block=(8, 16, 32),          # number of channels per block
@@ -49,6 +51,7 @@ class LitHnn(L.LightningModule):
                  pool_type='max',
                  invariant_channels=64,
                  bn="Normbn",
+                 residual: bool = False,
                  activation_type="gated_sigmoid",
                  lr=0.001,
                  weight_decay=0.0001,
@@ -67,6 +70,7 @@ class LitHnn(L.LightningModule):
         super().__init__()
 
         self.save_hyperparameters()
+        self.dataset = dataset
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self.lr = lr
         self.weight_decay = weight_decay
@@ -87,6 +91,7 @@ class LitHnn(L.LightningModule):
                           pool_type=pool_type,
                           invariant_channels=invariant_channels,
                           bn=bn,
+                          residual=residual,
                           activation_type=activation_type,
                           grey_scale=grey_scale,
                           img_size=img_size,
@@ -102,37 +107,6 @@ class LitHnn(L.LightningModule):
         self.invar_check_every_n_epochs = max(1, int(invar_check_every_n_epochs))
         self.invar_chunk_size = max(1, int(invar_chunk_size))
         self.num_of_batches_to_use_for_invar_logging = max(1, int(num_of_batches_to_use_for_invar_logging))
-        # self._nan_hooks = []
-
-        # # register NaN/Inf guard hooks on all modules to pinpoint the source
-        # def _nan_hook(module, inp, out):
-        #     # check inputs
-        #     for t in inp:
-        #         if torch.is_tensor(t):
-        #             if not torch.isfinite(t).all():
-        #                 bad = torch.nonzero(~torch.isfinite(t), as_tuple=False)[0].tolist()
-        #                 raise RuntimeError(
-        #                     f"NaN/Inf detected in input of {module.__class__.__name__} at {bad}, "
-        #                     f"shape={tuple(t.shape)}"
-        #                 )
-        #     # check outputs (GeometricTensor has .tensor)
-        #     outs = out
-        #     if isinstance(out, (list, tuple)):
-        #         outs = out
-        #     else:
-        #         outs = (out,)
-        #     for t in outs:
-        #         if hasattr(t, "tensor"):
-        #             t = t.tensor
-        #         if torch.is_tensor(t) and not torch.isfinite(t).all():
-        #             bad = torch.nonzero(~torch.isfinite(t), as_tuple=False)[0].tolist()
-        #             raise RuntimeError(
-        #                 f"NaN/Inf detected after {module.__class__.__name__} at {bad}, "
-        #                 f"shape={tuple(t.shape)}"
-        #             )
-
-        # for m in self.model.modules():
-        #     self._nan_hooks.append(m.register_forward_hook(_nan_hook))
 
     def _should_log_invar(self, stage: str, batch_idx: int) -> bool:
         if not self.invar_error_logging:
@@ -238,14 +212,40 @@ class LitHnn(L.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = optim.lr_scheduler.SequentialLR(
+        if self.dataset == "mnist_rot":
+            optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+            scheduler = optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[
+                    optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=self.burn_in_period),
+                    optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.exp_dump),
+                ],
+                milestones=[self.burn_in_period],
+            )
+        else:
+            cosine_iters = max(1, self.epochs - self.burn_in_period)
+            optimizer = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+            if self.burn_in_period > 0:
+                scheduler = optim.lr_scheduler.SequentialLR(
                     optimizer,
                     schedulers=[
-                        optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=self.burn_in_period),
-                        optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.exp_dump)
+                        optim.lr_scheduler.LinearLR(
+                            optimizer,
+                            start_factor=0.1,
+                            total_iters=self.burn_in_period,
+                        ),
+                        optim.lr_scheduler.CosineAnnealingLR(
+                            optimizer,
+                            T_max=cosine_iters,
+                        ),
                     ],
-                    milestones=[self.burn_in_period]
+                    milestones=[self.burn_in_period],
+                )
+            else:
+                scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max=cosine_iters,
+                    eta_min=self.lr * self.exp_dump,
                 )
 
         return {
@@ -259,6 +259,44 @@ def _sanitize_component(value) -> str:
     sanitized = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in component)
     sanitized = sanitized.strip("-_")
     return sanitized or "value"
+
+
+def _parse_blocks(blocks_cfg):
+    """
+    Normalize blocks config into lists of channels, kernels, paddings.
+    Accepts a Python list (e.g., from YAML) or a JSON/string payload like '[[16,7,3],[24,5,2]]'.
+    """
+    if blocks_cfg is None:
+        return None
+    parsed = None
+    if isinstance(blocks_cfg, str):
+        try:
+            parsed = json.loads(blocks_cfg)
+        except Exception:
+            # fallback: split "16-7-3,24-5-2"
+            try:
+                parsed = []
+                for item in blocks_cfg.split(","):
+                    parts = item.strip().split("-")
+                    if len(parts) != 3:
+                        continue
+                    parsed.append([int(parts[0]), int(parts[1]), int(parts[2])])
+            except Exception:
+                parsed = None
+    else:
+        parsed = blocks_cfg
+
+    if not parsed:
+        return None
+    channels, kernels, paddings = [], [], []
+    for triplet in parsed:
+        if len(triplet) != 3:
+            continue
+        c, k, p = triplet
+        channels.append(int(c))
+        kernels.append(int(k))
+        paddings.append(int(p))
+    return (channels, kernels, paddings) if channels else None
 
 
 def _copy_model_checkpoint(ckpt_path: str, export_dir: str, subdir: str, name_parts) -> str:
@@ -301,29 +339,44 @@ def _train_impl(config):
         model_export_subdir = default_subdir
     flip_flag = bool(getattr(config, "flip", False))
     baseline_pretrained = bool(getattr(config, "baseline_pretrained", False))
+    blocks_cfg = _parse_blocks(getattr(config, "blocks", None))
+    if blocks_cfg:
+        base_channels_per_block, base_kernels_per_block, base_paddings_per_block = blocks_cfg
+    else:
+        base_channels_per_block = list(getattr(config, "channels_per_block", ()))
+        base_kernels_per_block = list(getattr(config, "kernels_per_block", ()))
+        base_paddings_per_block = list(getattr(config, "paddings_per_block", ()))
     mnist = False
     if dataset == "mnist_rot":
         datamodule = MnistRotDataModule(batch_size=config.batch_size, 
                                         data_dir="./src/datasets_utils/mnist_rotation_new", 
                                         img_size=getattr(config, "img_size", None),
-                                        train_fraction=train_subset_fraction)
+                                        train_fraction=train_subset_fraction,
+                                        aug=config.aug,
+                                        normalize=config.normalize)
         grey_scale = True
         mnist=True
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
                                         img_size=getattr(config, "img_size", None),
-                                        train_fraction=train_subset_fraction)
+                                        train_fraction=train_subset_fraction,
+                                        aug=config.aug,
+                                        normalize=config.normalize)
         grey_scale = False
     elif dataset == "colorectal_hist":
         datamodule = ColorectalHistDataModule(batch_size=config.batch_size,
                                               img_size=getattr(config, "img_size", None),
-                                              train_fraction=train_subset_fraction)
+                                              train_fraction=train_subset_fraction,
+                                              aug=config.aug,
+                                              normalize=config.normalize)
         grey_scale = False
     elif dataset == "eurosat":
         datamodule = EuroSATDataModule(batch_size=config.batch_size,
                                        img_size=getattr(config, "img_size", None),
                                        seed=seed,
-                                       train_fraction=train_subset_fraction)
+                                       train_fraction=train_subset_fraction,
+                                       aug=config.aug,
+                                       normalize=config.normalize)
         grey_scale = False
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
@@ -344,9 +397,10 @@ def _train_impl(config):
         wandb.config.update({
             "activation_type": getattr(config, "activation_type", None),
             "normalization": getattr(config, "bn", None),
+            "blocks": blocks_cfg,
         }, allow_val_change=True)
 
-        channels_per_block_updated = [int(c * config.channels_multiplier) for c in config.channels_per_block]
+        channels_per_block_updated = [int(c * config.channels_multiplier) for c in base_channels_per_block]
         wandb.config.update({
             "channels_per_block": channels_per_block_updated
         }, allow_val_change=True)
@@ -363,12 +417,13 @@ def _train_impl(config):
         
         model = LitHnn(
             n_classes=n_classes_dm,
+            dataset=dataset,
             max_rot_order=config.max_rot_order,
             flip=config.flip,
 
             channels_per_block=channels_per_block_updated,
-            kernels_per_block=config.kernels_per_block,
-            paddings_per_block=config.paddings_per_block,
+            kernels_per_block=base_kernels_per_block,
+            paddings_per_block=base_paddings_per_block,
             pool_after_every_n_blocks=config.pool_after_every_n_blocks,
             conv_sigma=config.conv_sigma,
             activation_type=config.activation_type,
@@ -379,6 +434,7 @@ def _train_impl(config):
             pool_type=config.pool_type,
             invariant_channels=updated_invariant_channels,
             bn=config.bn,
+            residual=getattr(config, "residual", False),
             lr=config.lr,
             weight_decay=config.weight_decay,
             epochs=config.epochs,
@@ -406,22 +462,28 @@ def _train_impl(config):
             weight_decay=config.weight_decay,
             epochs=config.epochs,
             burin_in_period=config.burin_in_period,
-            exp_dump=config.exp_dump,
             in_channels=in_channels,
             pretrained=baseline_pretrained,
         )
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
 
-    chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
-                            save_top_k=1, mode='min')
+    save_flag = bool(getattr(config, "save", True))
+    chkpt = None
+    if save_flag:
+        chkpt = ModelCheckpoint(monitor='val_loss', filename='HNet-{epoch:02d}-{val_loss:.2f}',
+                                save_top_k=1, mode='min')
     early = EarlyStopping(monitor='val_loss', mode='min', patience=config.patience, verbose=True)
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
-    
+
+    callbacks = [early, lr_monitor]
+    if chkpt is not None:
+        callbacks.insert(0, chkpt)
+
     trainer = Trainer(
         max_epochs=config.epochs,
         logger=logger,
-        callbacks=[early, chkpt, lr_monitor],
+        callbacks=callbacks,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         strategy="auto",
@@ -433,8 +495,8 @@ def _train_impl(config):
     )
 
     trainer.fit(model, datamodule=datamodule)
-    best_ckpt_path = chkpt.best_model_path or None
-    best_val_loss = float(chkpt.best_model_score.item()) if chkpt.best_model_score is not None else None
+    best_ckpt_path = chkpt.best_model_path if chkpt is not None else None
+    best_val_loss = float(chkpt.best_model_score.item()) if chkpt is not None and chkpt.best_model_score is not None else None
     if best_ckpt_path:
         test_metrics = trainer.test(model=None, datamodule=datamodule, ckpt_path=best_ckpt_path)
     else:
@@ -445,20 +507,25 @@ def _train_impl(config):
     test_loss = float(tm.get("test_loss", float("nan")))
 
     exported_ckpt = ""
-    if best_ckpt_path:
+    if best_ckpt_path and save_flag:
         name_parts = [
             model_type,
             dataset,
             f"seed{seed}",
+            "aug" if getattr(config, "aug", False) else "noaug",
         ]
         if model_type == "equivariant":
             name_parts.extend([
                 getattr(config, "activation_type", None),
                 getattr(config, "bn", None),
                 "flip" if flip_flag else None,
+                "residual" if getattr(config, "residual", False) else None,
             ])
         elif model_type == "resnet18":
-            name_parts.append("pretrained" if baseline_pretrained else "scratch")
+            name_parts.extend([
+                "resnet",
+                "pretrained" if baseline_pretrained else "scratch"
+            ])
         exported_ckpt = _copy_model_checkpoint(best_ckpt_path, model_export_dir, model_export_subdir, name_parts)
 
     return {
@@ -493,19 +560,25 @@ if __name__ == "__main__":
     parser.add_argument("--baseline_pretrained", action="store_true",
                         help="Use ImageNet pretrained weights when model_type=resnet18.")
     parser.add_argument("--flip", type=bool, default=False, help="for O2")
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--aug", type=bool, default=True)
+    parser.add_argument("--normalize", type=bool, default=True)
+    parser.add_argument("--residual", type=bool, default=False, help="Enable residual connections between blocks.")
+    parser.add_argument("--save", type=bool, default=True, help="If true, save best checkpoint and export copy.")
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=1e-5)
-    parser.add_argument("--burin_in_period", type=int, default=15)
-    parser.add_argument("--exp_dump", type=float, default=0.9)
+    parser.add_argument("--weight_decay", type=float, default=0)
+    parser.add_argument("--burin_in_period", type=int, default=10)
+    parser.add_argument("--exp_dump", type=float, default=0.8)
     parser.add_argument("--channels_per_block", default=(16, 24, 32, 32, 48, 64))
     parser.add_argument("--kernels_per_block", default=(7, 5, 5, 5, 5, 5))
-    parser.add_argument("--paddings_per_block", default=(1, 2, 2, 2, 2, 0))
+    parser.add_argument("--paddings_per_block", default=(3, 2, 2, 2, 2, 2))
+    parser.add_argument("--blocks", type=str, default=None,
+                        help='Optional JSON/list of [channels, kernel, padding] triplets; overrides *_per_block settings.')
     parser.add_argument("--channels_multiplier", type=float, default=1.0)
     parser.add_argument("--conv_sigma", type=float, default=0.6)
     parser.add_argument("--pool_after_every_n_blocks", default=2)
-    parser.add_argument("--activation_type", default="norm_relu", choices=["gated_sigmoid","gated_shared_sigmoid", "norm_relu", "norm_squash", "fourier_relu_16", "fourier_elu_16", "fourier_relu_8", "fourier_elu_8", "fourier_relu_32", "fourier_elu_32", "fourier_relu_4", "fourier_elu_4", "non_equi_relu", "non_equi_bn", "normbn_relu"])
+    parser.add_argument("--activation_type", default="norm_relu")
     parser.add_argument("--pool_size", type=int, default=2)
     parser.add_argument("--pool_sigma", type=float, default=0.66)
     parser.add_argument("--invar_type", type=str, default='norm', choices=['conv2triv', 'norm'])
