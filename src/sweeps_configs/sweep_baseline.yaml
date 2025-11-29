@@ -1,0 +1,43 @@
+program: src/train.py
+method: grid
+project: baseline_resnet18
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+  project:
+    value: "baseline_resnet18"
+  dataset:
+    values: ["colorectal_hist", "mnist_rot", "eurosat"]
+  model_type:
+    value: "resnet18"
+  baseline_pretrained:
+    values: [true]
+  seed:
+    values: [4]
+
+  lr:
+    values: [0.005, 0.001,0.0005, 0.0001]
+  weight_decay:
+    values: [0, 0.0001, 0.001]
+  burin_in_period:
+    values: [5, 10, 20]
+  batch_size:
+    value: 128
+  epochs:
+    values: [60, 100, 150]
+  patience:
+    value: 15
+  img_size:
+    value: None
+  precision:
+    value: "32-true"
+  
+  train_subset_fraction:
+    value: 1
+
+  model_export_dir:
+    value: "saved_models/"
+  model_export_subdir:
+    value: "baseline/"

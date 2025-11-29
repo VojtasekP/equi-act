@@ -1,0 +1,42 @@
+program: src/train.py
+method: grid
+project: colorectal_hist_baseline
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+  project:
+    value: "colorectal_hist_baseline"
+  dataset:
+    values: ["colorectal_hist"]
+  model_type:
+    value: "resnet18"
+  baseline_pretrained:
+    values: [false, true]
+  seed:
+    values: [0, 1, 2, 3, 4]
+
+  lr:
+    value: 0.001
+  weight_decay:
+    value: 0.001
+  burin_in_period:
+    value: 20
+  batch_size:
+    value: 64
+  epochs:
+    value: 150
+  patience:
+    value: 60
+  img_size:
+    value: 150
+  precision:
+    value: "32-true"
+  train_subset_fraction:
+    value: 1
+
+  model_export_dir:
+    value: "saved_models/"
+  model_export_subdir:
+    value: "baseline_colorectal_hist/"

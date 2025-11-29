@@ -1,36 +1,47 @@
 program: src/train.py
-method: grid
+method: bayes
 project: colorectal_hist
 metric:
   name: val_loss
   goal: minimize
 
+early_terminate:
+  type: hyperband
+  min_iter: 15
+  eta: 2
 parameters:
   project:
     value: "colorectal_hist"
   dataset:
     values: ["colorectal_hist"]
   activation_type:
-    values: ["norm_relu"]
+    values: ["gated_sigmoid"]
   bn:
     values: ["Normbn"]
+
+  aug:
+    value: true
+  normalize:
+    value: true
+  residual:
+    values: [true, false]
   seed:
-    values: [0, 1, 2]            # validate best config with multiple seeds
+    values: [0]            # validate best config with multiple seeds
     # values: [0, 1, 2, 3, 4,]
   max_rot_order:
-    values: [3,5,7]
-  channels_per_block:
-    value: [16, 24, 32, 32, 48, 64]
-  channels_multiplier:
-    values: [1, 1.5, 2.0, 2.25, 2.5, 2.75, 3.0]
-  kernels_per_block:
-    # value: [9, 7, 7, 7, 7, 5]
-    value: [7, 5, 5, 5, 5, 5]
-  paddings_per_block:
-    # value: [1, 3, 3, 3, 3, 1]
-    value: [1, 2, 2, 2, 2, 2]
+    value: 3
+  flip:
+    values: [false]
+  blocks:
+    values: # 16, 52, 69, 69, 103, 103
+      - [[16, 7, 3], [52, 5, 2], [69, 5, 2], [69, 5, 2], [103, 5, 2], [103, 5, 2]]
+      - [[16, 7, 3], [24, 5, 2], [32, 5, 2], [32, 5, 2], [48, 5, 2], [64, 5, 2]]
+      - [[16, 7, 3], [52, 3, 1], [69, 3, 1], [69, 3, 1], [103, 3, 1], [103, 3, 1]]
+      - [[16, 7, 3], [24, 3, 1], [32, 3, 1], [32, 3, 1], [48, 3, 1], [64, 3, 1]]
+      - [[16, 7, 3], [24, 3, 1], [32, 3, 1], [32, 3, 1], [48, 3, 1], [48, 3, 1], [64, 3, 1], [64, 3, 1]]
+      - [[16, 7, 3], [32, 5, 2], [32, 5, 2], [48, 5, 2]]
   conv_sigma:
-    values: [0.6]
+    value: 0.6
   pool_after_every_n_blocks:
     value: 2
   pool_size:
@@ -42,29 +53,41 @@ parameters:
   pool_type:
     values: ['max']
   invariant_channels:
-    value: 64
+    values: [64]
   invar_error_logging:
-    value: False
-
-
-  lr:
-    value: 0.001
-    
-  weight_decay:
-    value: 0.0001
-  burin_in_period:
-    value: 15
-  exp_dump:
-    value: 0.9
-  batch_size:
+    value: false
+  invar_check_every_n_epochs:
+    value: 3
+  invar_chunk_size:
+    value: 4
+  num_of_batches_to_use_for_invar_logging:
+    value: 5
+  train_subset_fraction:
+    value: 0.2
+  num_of_angles:
     value: 16
+  lr:
+    distribution: log_uniform_values
+    min: 0.00005
+    max: 0.001
+
+  weight_decay:
+    value: 0.001
+  burin_in_period:
+    value: 5
+  batch_size:
+    value: 32
   epochs:
-    value: 50
+    value: 80
   patience:
-    value: 60
+    value: 15
   img_size:
     value: 150
   precision:
-    value: "32-true"
-
-
+    value: "16-mixed"
+  save:
+    value: false
+  model_export_dir:
+    value: "saved_models/"
+  model_export_subdir:
+    value: "colorectal_hist/"

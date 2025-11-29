@@ -1,0 +1,42 @@
+program: src/train.py
+method: grid
+project: resisc45_baseline
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+  project:
+    value: "resisc45_baseline"
+  dataset:
+    values: ["resisc45"]
+  model_type:
+    value: "resnet18"
+  baseline_pretrained:
+    values: [false, true]
+  seed:
+    values: [0, 1, 2, 3, 4]
+
+  lr:
+    value: 0.001
+  weight_decay:
+    value: 0.0001
+  burin_in_period:
+    value: 15
+  batch_size:
+    value: 256
+  epochs:
+    value: 50
+  patience:
+    value: 60
+  img_size:
+    value: 256
+  precision:
+    value: "32-true"
+  train_subset_fraction:
+    value: 1
+
+  model_export_dir:
+    value: "saved_models/"
+  model_export_subdir:
+    value: "baseline_resisc45/"

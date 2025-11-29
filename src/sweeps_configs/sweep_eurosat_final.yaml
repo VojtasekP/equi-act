@@ -11,7 +11,7 @@ parameters:
   dataset:
     values: ["eurosat"]
   activation_type:
-    values: ["normbn_relu"]
+    values: ["fourierbn_elu_16"]
   bn:
     values: ["Normbn"]
   seed:
@@ -21,10 +21,20 @@ parameters:
     value: 3
   flip:
     values: [false]
-  channels_per_block:
-    value: [16, 52, 69, 69, 103, 103]
-  channels_multiplier:
-    value: 1
+  aug:
+    value: [true, false]
+  normalize:
+    value: true
+  residual:
+    value: false
+  blocks:
+    value:
+      - [16, 7, 3]
+      - [24, 5, 2]
+      - [32, 5, 2]
+      - [32, 5, 2]
+      - [48, 5, 2]
+      - [64, 5, 2]
   kernels_per_block:
     # value: [9, 7, 7, 7, 7, 5]
     value: [7, 5, 5, 5, 5, 5]
