@@ -1,42 +1,44 @@
 program: src/train.py
-method: grid
+method: bayes
 project: eurosat
 metric:
   name: val_loss
   goal: minimize
-
+early_terminate:
+  type: hyperband
+  min_iter: 15
+  eta: 2
 parameters:
   project:
     value: "eurosat"
   dataset:
     values: ["eurosat"]
   activation_type:
-    values:
-      - gated_sigmoid
-      - gated_shared_sigmoid
-      - norm_relu
-      - fourier_relu_16
-      - normbn_relu
-      - normbnvec_relu
-      - fourierbn_relu_16
+    values: ["gated_sigmoid"]
   bn:
     values: ["Normbn"]
 
   aug:
-    values: [true, false]
+    value: true
   normalize:
     value: true
   residual:
-    value: false
+    values: [true, false]
   seed:
-    values: [0, 1, 2, 3, 4]
+    values: [0]            # validate best config with multiple seeds
     # values: [0, 1, 2, 3, 4,]
   max_rot_order:
     value: 3
   flip:
     values: [false]
   blocks:
-    value: [[16, 7, 3], [52, 5, 2], [69, 5, 2], [69, 5, 2], [103, 5, 2], [103, 5, 2]]
+    values: # 16, 52, 69, 69, 103, 103
+      - [[16, 7, 3], [52, 5, 2], [69, 5, 2], [69, 5, 2], [103, 5, 2], [103, 5, 2]]
+      - [[16, 7, 3], [24, 5, 2], [32, 5, 2], [32, 5, 2], [48, 5, 2], [64, 5, 2]]
+      - [[16, 7, 3], [52, 3, 1], [69, 3, 1], [69, 3, 1], [103, 3, 1], [103, 3, 1]]
+      - [[16, 7, 3], [24, 3, 1], [32, 3, 1], [32, 3, 1], [48, 3, 1], [64, 3, 1]]
+      - [[16, 7, 3], [24, 3, 1], [32, 3, 1], [32, 3, 1], [48, 3, 1], [48, 3, 1], [64, 3, 1], [64, 3, 1]]
+      - [[16, 7, 3], [32, 5, 2], [32, 5, 2], [48, 5, 2]]
   conv_sigma:
     value: 0.6
   pool_after_every_n_blocks:
@@ -60,28 +62,34 @@ parameters:
   num_of_batches_to_use_for_invar_logging:
     value: 5
   train_subset_fraction:
-    value: 1
+    value: 0.2
   num_of_angles:
     value: 16
   lr:
-    value: 0.0005
+    distribution: log_uniform_values
+    min: 0.00005
+    max: 0.001
 
   weight_decay:
-    value: 0.001
+    values:
+    - 0
+    - 0.0001
+    - 0.005
+    - 0.001
   burin_in_period:
     value: 5
   batch_size:
     value: 32
   epochs:
-    value: 60
+    value: 80
   patience:
-    value: 60
+    value: 15
   img_size:
-    value: 64
+    value: 150
   precision:
-    value: "32-true"
+    value: "16-mixed"
   save:
-    value: true
+    value: false
   model_export_dir:
     value: "saved_models/"
   model_export_subdir:

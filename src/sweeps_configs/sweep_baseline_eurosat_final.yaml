@@ -1,13 +1,10 @@
 program: src/train.py
-method: bayes
+method: grid
 project: baseline_resnet18
 metric:
   name: val_loss
   goal: minimize
-early_terminate:
-  type: hyperband
-  min_iter: 15
-  eta: 2
+
 parameters:
   project:
     value: "baseline_resnet18"
@@ -18,40 +15,33 @@ parameters:
   baseline_pretrained:
     values: [false]
   aug:
-    value: true
+    values: [false, true]
   seed:
-    values: [4]
+    values: [0, 1, 2, 3, 4]
 
   lr:
-    distribution: log_uniform_values
-    min: 0.00005
-    max: 0.001
+    value: 0.0002
 
   weight_decay:
-    values:
-    - 0
-    - 0.0001
-    - 0.0005
-    - 0.001
-    - 0.005
+    value: 0.001
   burin_in_period:
     value: 5
   batch_size:
     value: 128
   epochs:
-    values: [100]
+    value: 100
   patience:
-    value: 15
+    value: 100
   img_size:
-    value: 150
+    value: 64
   precision:
-    value: "16-mixed"
+    value: "32-true"
   
   train_subset_fraction:
     value: 1
   save:
-    value: false
+    value: true
   model_export_dir:
     value: "saved_models/"
   model_export_subdir:
-    value: "baseline/"
+    value: "baseline_eurosat/"

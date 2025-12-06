@@ -12,25 +12,19 @@ parameters:
     values: ["colorectal_hist"]
   activation_type:
     values:
-      - gated_sigmoid
+      # - fourierbn_relu_16
       - gated_shared_sigmoid
-      - norm_relu
-      - fourier_relu_16
-      - normbn_relu
-      - normbn_sigmoid
-      - normbnvec_relu
-      - fourierbn_relu_16
   bn:
     values: ["Normbn"]
 
   aug:
-    values: [true, false]
+    values: [false] # [true, false]
   normalize:
     value: true
   residual:
     value: false
   seed:
-    values: [0, 1, 2, 3, 4]            # validate best config with multiple seeds
+    values: [4]            # validate best config with multiple seeds
     # values: [0, 1, 2, 3, 4,]
   max_rot_order:
     value: 3
@@ -68,21 +62,24 @@ parameters:
   lr:
     value: 0.0005
 
-    
   weight_decay:
     value: 0.005
+  label_smoothing:
+    value: 0.1
   burin_in_period:
     value: 5
   batch_size:
     value: 32
   epochs:
-    value: 80
+    value: 60
   patience:
-    value: 80
+    value: 60
   img_size:
     value: 150
   precision:
     value: "32-true"
+  save:
+    value: true
   model_export_dir:
     value: "saved_models/"
   model_export_subdir:

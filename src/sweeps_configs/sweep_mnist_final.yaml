@@ -25,7 +25,9 @@ parameters:
       # - normbnvec_elu
       # - normbnvec_sigmoid
       # - fourierbn_elu_16
-      - fourierbn_relu_16
+      - fourierbn_relu_64
+      - fourierbn_relu_32
+      # - fourierbn_relu_16
     
   bn:
     values: ["Normbn"]

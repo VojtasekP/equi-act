@@ -65,13 +65,14 @@ class LitHnn(L.LightningModule):
                  invar_check_every_n_epochs=1,
                  invar_chunk_size=4,
                  num_of_batches_to_use_for_invar_logging=16,
-                 num_of_angles=32
+                 num_of_angles=32,
+                 label_smoothing: float = 0.0,
                  ):
         super().__init__()
 
         self.save_hyperparameters()
         self.dataset = dataset
-        self.loss_fn = torch.nn.CrossEntropyLoss()
+        self.loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         self.lr = lr
         self.weight_decay = weight_decay
         self.epochs = epochs
@@ -98,6 +99,9 @@ class LitHnn(L.LightningModule):
                           mnist=mnist
                           )
 
+        # Clone basis index tensors to avoid overlapping storage issues when loading checkpoints.
+        self._clone_in_indices()
+
         self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
         self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
         self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
@@ -107,6 +111,15 @@ class LitHnn(L.LightningModule):
         self.invar_check_every_n_epochs = max(1, int(invar_check_every_n_epochs))
         self.invar_chunk_size = max(1, int(invar_chunk_size))
         self.num_of_batches_to_use_for_invar_logging = max(1, int(num_of_batches_to_use_for_invar_logging))
+
+    def _clone_in_indices(self):
+        with torch.no_grad():
+            for name, tensor in list(self.model.named_parameters()) + list(self.model.named_buffers()):
+                if "in_indices_" not in name:
+                    continue
+                if not isinstance(tensor, torch.Tensor):
+                    continue
+                tensor.data = tensor.data.clone()
 
     def _should_log_invar(self, stage: str, batch_idx: int) -> bool:
         if not self.invar_error_logging:
@@ -337,6 +350,8 @@ def _train_impl(config):
     model_export_subdir = _sanitize_component(model_export_subdir)
     if not model_export_subdir:
         model_export_subdir = default_subdir
+    label_smoothing = float(getattr(config, "label_smoothing", 0.0))
+    label_smoothing = max(0.0, min(label_smoothing, 0.999999))
     flip_flag = bool(getattr(config, "flip", False))
     baseline_pretrained = bool(getattr(config, "baseline_pretrained", False))
     blocks_cfg = _parse_blocks(getattr(config, "blocks", None))
@@ -391,6 +406,7 @@ def _train_impl(config):
         "model_export_dir": model_export_dir,
         "model_export_subdir": model_export_subdir,
         "model_type": model_type,
+        "label_smoothing": label_smoothing,
     }, allow_val_change=True)
 
     if model_type == "equivariant":
@@ -449,6 +465,7 @@ def _train_impl(config):
             invar_chunk_size=invar_chunk_size,
             num_of_batches_to_use_for_invar_logging=config.num_of_batches_to_use_for_invar_logging,
             num_of_angles=config.num_of_angles,
+            label_smoothing=label_smoothing,
         )
     elif model_type == "resnet18":
         in_channels = 1 if dataset == "mnist_rot" else 3
@@ -464,6 +481,7 @@ def _train_impl(config):
             burin_in_period=config.burin_in_period,
             in_channels=in_channels,
             pretrained=baseline_pretrained,
+            label_smoothing=label_smoothing,
         )
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
@@ -557,8 +575,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_type", type=str, default="equivariant",
                         choices=["equivariant", "resnet18"],
                         help="Choose between the equivariant model and a baseline ResNet18.")
-    parser.add_argument("--baseline_pretrained", action="store_true",
-                        help="Use ImageNet pretrained weights when model_type=resnet18.")
+    parser.add_argument("--baseline_pretrained", type=bool, default=False, help="Use ImageNet pretrained weights when model_type=resnet18.")
     parser.add_argument("--flip", type=bool, default=False, help="for O2")
     parser.add_argument("--aug", type=bool, default=True)
     parser.add_argument("--normalize", type=bool, default=True)
@@ -568,6 +585,8 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=0)
+    parser.add_argument("--label_smoothing", type=float, default=0.0,
+                        help="Label smoothing applied to cross-entropy loss.")
     parser.add_argument("--burin_in_period", type=int, default=10)
     parser.add_argument("--exp_dump", type=float, default=0.8)
     parser.add_argument("--channels_per_block", default=(16, 24, 32, 32, 48, 64))

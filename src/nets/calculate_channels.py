@@ -62,7 +62,7 @@ def adjust_channels(
         elif activation_type in ['gated_shared_sigmoid']:
             r_in = FieldType(group, [group.trivial_repr] * 2 + irreps)
             r_out = FieldType(group, [group.trivial_repr] + irreps)
-        elif activation_type in ['gated_sigmoid', 'non_equi_relu']:
+        elif activation_type in ['gated_sigmoid']:
             I = len(irreps)
 
             r_in = FieldType(group, [group.trivial_repr] * (I + 1) + irreps)

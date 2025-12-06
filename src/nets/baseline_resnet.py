@@ -16,6 +16,7 @@ class LitResNet18(L.LightningModule):
         burin_in_period: int = 5,
         in_channels: int = 3,
         pretrained: bool = False,
+        label_smoothing: float = 0.0,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -48,10 +49,20 @@ class LitResNet18(L.LightningModule):
         backbone.fc = nn.Linear(in_features, n_classes)
         self.model = backbone
 
-        self.loss_fn = nn.CrossEntropyLoss()
+        self.loss_fn = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
         self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
         self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
+
+    def on_fit_start(self):
+        # Log parameter counts for visibility in W&B
+        n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        n_all = sum(p.numel() for p in self.model.parameters())
+        if self.logger is not None and hasattr(self.logger, "experiment"):
+            self.logger.experiment.log({
+                "model/num_trainable_params": n_params,
+                "model/num_total_params": n_all,
+            })
 
     def forward(self, x):
         return self.model(x)

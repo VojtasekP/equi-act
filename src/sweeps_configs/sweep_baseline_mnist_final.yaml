@@ -9,35 +9,39 @@ parameters:
   project:
     value: "baseline_resnet18"
   dataset:
-    values: ["colorectal_hist", "mnist_rot", "eurosat"]
+    values: ["mnist_rot"]
   model_type:
     value: "resnet18"
   baseline_pretrained:
-    values: [true]
+    values: [false]
+  aug:
+    values: [false, true]
   seed:
-    values: [4]
+    values: [0, 1, 2, 3, 4]
 
   lr:
-    values: [0.005, 0.001,0.0005, 0.0001]
+    value: 0.0002
+
   weight_decay:
-    values: [0, 0.0001, 0.001]
+    value: 0.001
   burin_in_period:
-    values: [5, 10, 20]
+    value: 5
   batch_size:
     value: 128
   epochs:
-    values: [60, 100, 150]
+    value: 100
   patience:
-    value: 15
+    value: 100
   img_size:
-    value: None
+    value: 29
   precision:
     value: "32-true"
   
   train_subset_fraction:
     value: 1
-
+  save:
+    value: true
   model_export_dir:
     value: "saved_models/"
   model_export_subdir:
-    value: "baseline/"
+    value: "baseline_mnist/"
