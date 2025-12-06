@@ -28,6 +28,30 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = ROOT / "plots"
 
 
+def _configure_rcparams() -> None:
+    """
+    Try LaTeX text rendering; fall back to default text if LaTeX deps are missing.
+    """
+    plt.rcParams.update({
+        "text.usetex": True,
+        "font.family": "serif",
+        "font.serif": ["Computer Modern"],
+        "font.size": 15,
+    })
+    try:
+        fig, ax = plt.subplots()
+        ax.text(0.5, 0.5, "test", ha="center")
+        fig.canvas.draw()  # Force TeX render; will error if LaTeX packages are missing
+    except Exception as exc:
+        print(f"[plot_dataset_examples] LaTeX rendering unavailable ({exc}); disabling text.usetex.")
+        plt.rcParams.update({"text.usetex": False})
+    finally:
+        plt.close("all")
+
+
+_configure_rcparams()
+
+
 def to_numpy_image(img) -> np.ndarray:
     """Convert PIL or torch image to HWC numpy array for plotting."""
     if isinstance(img, torch.Tensor):
@@ -58,16 +82,19 @@ def plot_examples_grid(
         arr = to_numpy_image(img)
         cmap = "gray" if arr.ndim == 2 else None
         ax.imshow(arr, cmap=cmap)
-        ax.set_title(label_name, fontsize=9)
+        ax.set_title(label_name, fontsize=11)
         ax.axis("off")
 
     for ax in axes[n:]:
         ax.axis("off")
 
-    fig.suptitle(title, fontsize=12)
+    fig.suptitle(title, fontsize=15)
     fig.tight_layout(rect=[0, 0, 1, 0.95], h_pad=1.6)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, bbox_inches="tight")
+    png_path = output_path.with_suffix(".png")
+    pdf_path = output_path.with_suffix(".pdf")
+    png_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(png_path, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -108,7 +135,9 @@ def sample_one_per_class(
 def plot_mnist_examples(output_dir: Path, seed: int | None, data_dir: Path | None = None) -> Path:
     download_mnist_rotation(data_dir)
     mnist_ds = MnistRotDataset(mode="train", transform=None, data_dir=data_dir)
-    examples = sample_one_per_class(mnist_ds, num_classes=10, label_names=None, seed=seed)
+    raw_examples = sample_one_per_class(mnist_ds, num_classes=10, label_names=None, seed=seed)
+    # Flip horizontally to correct mirrored appearance
+    examples = [(label, np.flip(to_numpy_image(img), axis=1)) for label, img in raw_examples]
     out_path = output_dir / "mnist_rot_examples.png"
     plot_examples_grid(examples, "Rotated MNIST examples (one per class)", out_path)
     return out_path
