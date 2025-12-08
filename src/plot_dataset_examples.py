@@ -88,7 +88,7 @@ def plot_examples_grid(
     for ax in axes[n:]:
         ax.axis("off")
 
-    fig.suptitle(title, fontsize=15)
+    # fig.suptitle(title, fontsize=15)
     fig.tight_layout(rect=[0, 0, 1, 0.95], h_pad=1.6)
     png_path = output_path.with_suffix(".png")
     pdf_path = output_path.with_suffix(".pdf")
