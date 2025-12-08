@@ -82,7 +82,7 @@ def plot_examples_grid(
         arr = to_numpy_image(img)
         cmap = "gray" if arr.ndim == 2 else None
         ax.imshow(arr, cmap=cmap)
-        ax.set_title(label_name, fontsize=11)
+        ax.set_title(label_name, fontsize=13)
         ax.axis("off")
 
     for ax in axes[n:]:
