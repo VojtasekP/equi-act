@@ -12,6 +12,8 @@ from torchvision.transforms import Compose, Pad, Resize, RandomRotation, Interpo
 from torch_geometric.transforms import NormalizeScale, SamplePoints
 from torch_geometric.datasets import ModelNet
 from torch_geometric.loader import DataLoader as PyGDataLoader
+from torch_geometric.data import Data as PyGData
+from torch_geometric.nn import knn_graph, radius_graph
 from datasets_utils.mnist_download import download_mnist_rotation
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -507,6 +509,277 @@ class ColorectalHistDataModule(L.LightningDataModule):
     def test_dataloader(self):
         return TorchDataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False,
                           num_workers=8, pin_memory=True, persistent_workers=True)
+
+
+class MnistRotPointCloudDataset(Dataset):
+    """
+    PyTorch Dataset for MNIST rotation point clouds.
+    Loads pre-converted point cloud data from .npz files.
+    """
+
+    def __init__(self,
+                 npz_path: Path,
+                 transform=None,
+                 augment_rotation: bool = False,
+                 k_neighbors: int = 8,
+                 radius: float = None):
+        """
+        Args:
+            npz_path: Path to .npz file containing point clouds
+            transform: Optional transform to apply to features
+            augment_rotation: Whether to apply random rotation augmentation
+            k_neighbors: Number of neighbors for kNN graph construction
+            radius: If provided, use radius graph instead of kNN (None disables)
+        """
+        self.npz_path = npz_path
+        self.transform = transform
+        self.augment_rotation = augment_rotation
+        self.k_neighbors = k_neighbors
+        self.radius = radius
+
+        # Load data
+        data = np.load(npz_path, allow_pickle=True)
+        self.coords = data['coords']  # Object array of variable-length arrays
+        self.features = data['features']  # Object array of variable-length arrays
+        self.labels = data['labels']  # (N,) int64 array
+        self.num_points = data['num_points']  # (N,) int array
+
+    def __len__(self):
+        return len(self.labels)
+
+    def _rotate_pointcloud_2d(self, coords: np.ndarray, angle: float = None) -> np.ndarray:
+        """
+        Rotate 2D point cloud by a random or specified angle.
+
+        Args:
+            coords: (N, 2) array of (x, y) coordinates
+            angle: Rotation angle in radians. If None, samples uniformly from [0, 2π)
+
+        Returns:
+            Rotated coordinates (N, 2)
+        """
+        if angle is None:
+            angle = np.random.uniform(0, 2 * np.pi)
+
+        cos_a, sin_a = np.cos(angle), np.sin(angle)
+        rotation_matrix = np.array([
+            [cos_a, -sin_a],
+            [sin_a, cos_a]
+        ], dtype=np.float32)
+
+        return coords @ rotation_matrix.T
+
+    def __getitem__(self, idx):
+        """
+        Returns a PyG Data object with:
+            - x: features (num_points, feature_dim)
+            - pos: coordinates (num_points, 2)
+            - edge_index: graph connectivity (2, num_edges)
+            - y: label (scalar)
+        """
+        coords = self.coords[idx].copy()  # (N, 2)
+        features = self.features[idx].copy()  # (N, 1)
+        label = int(self.labels[idx])
+
+        # Apply rotation augmentation
+        if self.augment_rotation:
+            coords = self._rotate_pointcloud_2d(coords)
+
+        # Convert to tensors
+        pos = torch.from_numpy(coords).float()  # (N, 2)
+        x = torch.from_numpy(features).float()  # (N, 1)
+
+        # Build graph connectivity
+        if self.radius is not None:
+            # Radius graph
+            edge_index = radius_graph(pos, r=self.radius, loop=False)
+        else:
+            # kNN graph
+            edge_index = knn_graph(pos, k=self.k_neighbors, loop=False)
+
+        # Create PyG Data object
+        data = PyGData(x=x, pos=pos, edge_index=edge_index, y=label)
+
+        return data
+
+
+class MnistRotPointCloudDataModule(L.LightningDataModule):
+    """
+    PyTorch Lightning DataModule for MNIST rotation point clouds.
+
+    Expected directory structure:
+        <data_dir>/
+            train.npz
+            test.npz
+            metadata.txt
+
+    To generate point cloud data, first run:
+        python src/datasets_utils/mnist_to_pointcloud.py
+    """
+
+    def __init__(self,
+                 batch_size: int = 64,
+                 data_dir: Path | str = None,
+                 seed: int = 42,
+                 train_fraction: float = 1.0,
+                 augment_rotation: bool = True,
+                 k_neighbors: int = 8,
+                 radius: float = None,
+                 num_workers: int = None):
+        """
+        Args:
+            batch_size: Batch size for dataloaders
+            data_dir: Directory containing point cloud .npz files
+            seed: Random seed for train/val split
+            train_fraction: Fraction of training data to use (for experiments)
+            augment_rotation: Whether to apply random rotation augmentation during training
+            k_neighbors: Number of neighbors for kNN graph construction
+            radius: If provided, use radius graph instead of kNN
+            num_workers: Number of dataloader workers (defaults to cpu_count//2)
+        """
+        super().__init__()
+        self.batch_size = batch_size
+        self.seed = seed
+        self.train_fraction = train_fraction
+        self.augment_rotation = augment_rotation
+        self.k_neighbors = k_neighbors
+        self.radius = radius
+        self.num_workers = num_workers if num_workers is not None else max(1, os.cpu_count() // 2)
+        self.num_classes = 10
+
+        # Set data directory
+        if data_dir is None:
+            self.data_dir = Path(__file__).resolve().parent / "mnist_rotation_pointcloud"
+        else:
+            self.data_dir = Path(data_dir)
+
+        if not (0 < train_fraction <= 1.0):
+            raise ValueError("train_fraction must be in (0, 1].")
+
+        self.generator = torch.Generator().manual_seed(seed)
+
+    def prepare_data(self):
+        """
+        Check if point cloud files exist. If not, provide instructions.
+        """
+        train_file = self.data_dir / "train.npz"
+        test_file = self.data_dir / "test.npz"
+
+        if not train_file.exists() or not test_file.exists():
+            raise FileNotFoundError(
+                f"Point cloud files not found in {self.data_dir}.\n"
+                f"Please run the conversion script first:\n"
+                f"  python src/datasets_utils/mnist_to_pointcloud.py --output_dir {self.data_dir}"
+            )
+
+        print(f"Found point cloud data in {self.data_dir}")
+
+    def setup(self, stage: str | None = None):
+        if getattr(self, "_setup_done", False):
+            return
+
+        train_npz = self.data_dir / "train.npz"
+        test_npz = self.data_dir / "test.npz"
+
+        # Create full training dataset
+        full_train_ds = MnistRotPointCloudDataset(
+            train_npz,
+            augment_rotation=False,  # No augmentation for computing stats
+            k_neighbors=self.k_neighbors,
+            radius=self.radius
+        )
+
+        # Split into train/val
+        indices = torch.randperm(len(full_train_ds), generator=self.generator).tolist()
+
+        if self.train_fraction < 1.0:
+            subset_size = max(1, int(len(indices) * self.train_fraction))
+            indices = indices[:subset_size]
+
+        n_total = len(indices)
+        n_train = int(0.8 * n_total)
+        train_indices = indices[:n_train]
+        val_indices = indices[n_train:]
+
+        # Create train dataset with augmentation
+        train_full = MnistRotPointCloudDataset(
+            train_npz,
+            augment_rotation=self.augment_rotation,
+            k_neighbors=self.k_neighbors,
+            radius=self.radius
+        )
+
+        # Create eval datasets without augmentation
+        eval_full = MnistRotPointCloudDataset(
+            train_npz,
+            augment_rotation=False,
+            k_neighbors=self.k_neighbors,
+            radius=self.radius
+        )
+
+        self.mnist_train = torch.utils.data.Subset(train_full, train_indices)
+        self.mnist_val = torch.utils.data.Subset(eval_full, val_indices)
+
+        self.mnist_test = MnistRotPointCloudDataset(
+            test_npz,
+            augment_rotation=False,
+            k_neighbors=self.k_neighbors,
+            radius=self.radius
+        )
+
+        self.mnist_predict = self.mnist_test
+
+        print(f"Point cloud dataset setup complete:")
+        print(f"  - Train samples: {len(self.mnist_train)}")
+        print(f"  - Val samples: {len(self.mnist_val)}")
+        print(f"  - Test samples: {len(self.mnist_test)}")
+        print(f"  - Graph construction: {'radius' if self.radius else 'kNN'}")
+        if self.radius:
+            print(f"    Radius: {self.radius}")
+        else:
+            print(f"    k-neighbors: {self.k_neighbors}")
+
+        self._setup_done = True
+
+    def train_dataloader(self):
+        return PyGDataLoader(
+            self.mnist_train,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            persistent_workers=True if self.num_workers > 0 else False
+        )
+
+    def val_dataloader(self):
+        return PyGDataLoader(
+            self.mnist_val,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            persistent_workers=True if self.num_workers > 0 else False
+        )
+
+    def test_dataloader(self):
+        return PyGDataLoader(
+            self.mnist_test,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            persistent_workers=True if self.num_workers > 0 else False
+        )
+
+    def predict_dataloader(self):
+        return PyGDataLoader(
+            self.mnist_predict,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            persistent_workers=True if self.num_workers > 0 else False
+        )
 
 
 class ModelNet10PointClouds(L.LightningDataModule):
