@@ -13,11 +13,11 @@ dependencies = [
     "numpy>=1.26.4",
     "pytest>=8.4.2",
     "scipy==1.10.*",
-    "torch>=2.8.0",
+    "torch==2.5.1",          # Downgrade to stable
     "torch-geometric>=2.7.0",
-    "torchaudio>=2.8.0",
+    "torchaudio==2.5.1",     # Match torch version
     "torchmetrics>=1.8.2",
-    "torchvision>=0.23.0",
+    "torchvision==0.20.1",   # Compatible with torch 2.5.1
     "wandb>=0.22.0",
 ]
 [tool.setuptools.packages.find]
@@ -25,3 +25,4 @@ where = ["src"]
 
 [tool.uv.sources]
 escnn = { git = "https://github.com/QUVA-Lab/escnn.git" }
+
