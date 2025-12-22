@@ -25,8 +25,10 @@ parameters:
       # - normbnvec_elu
       # - normbnvec_sigmoid
       # - fourierbn_elu_16
-      - fourierbn_relu_64
-      - fourierbn_relu_32
+      # - fourierbn_relu_64
+      - fourierbn_relu_128
+      - fourier_relu_128
+      # - fourierbn_relu_32
       # - fourierbn_relu_16
     
   bn:
@@ -39,7 +41,7 @@ parameters:
     values: [false]
 
   aug:
-    values: [true, false]
+    values: [true]
   normalize:
     value: true
   residual:

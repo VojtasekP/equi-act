@@ -53,7 +53,7 @@ def chech_invariance_batch_r2(
     elems  = [r2_act.fibergroup.element(float(t)) for t in thetas]
 
     # Reference features
-    y_ref = model.forward_features(x)
+    y_ref = model.forward_invar_features(x)
     y_ref_tensor = y_ref.tensor if isinstance(y_ref, nn.GeometricTensor) else y_ref
 
     # Build transformed inputs (GeoTensor -> transform)
@@ -69,12 +69,12 @@ def chech_invariance_batch_r2(
         x_rot_list = [x_geo.transform(g).tensor for g in chunk_elems]
         x_rot_batch = torch.cat(x_rot_list, dim=0)
 
-        y_rot_batch = model.forward_features(
+        y_rot_batch = model.forward_invar_features(
             nn.GeometricTensor(x_rot_batch, model.input_type)
         )
         y_rot_batch_tensor = (
             y_rot_batch.tensor if isinstance(y_rot_batch, nn.GeometricTensor) else y_rot_batch
-        )
+        )   
 
         for y_rotated in torch.split(y_rot_batch_tensor, B, dim=0):
             e = rel_err(y_rotated, y_ref_tensor).mean()

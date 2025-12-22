@@ -1,0 +1,6 @@
+threshold: 0.01
+image_size: 28
+normalized_coords: True
+coord_range: [-1, 1]
+feature_dim: 1
+num_classes: 10
