@@ -13,6 +13,11 @@ from typing import Dict, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
+# Set Times New Roman as the default font (with fallbacks)
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman', 'DejaVu Serif', 'Liberation Serif', 'Times']
+plt.rcParams['mathtext.fontset'] = 'stix'  # STIX fonts are similar to Times
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -349,9 +354,10 @@ def _plot_sidebyside_comparison(
                 color='steelblue', edgecolor='black', linewidth=0.5)
 
     model1_name = _format_model_name(metadata1.get('activation', 'unknown'))
-    ax1.set_xlabel('Norm magnitude', fontsize=11)
-    ax1.set_ylabel('Normalized Density', fontsize=11)
-    ax1.set_title(f'{model1_name}', fontsize=12, fontweight='bold')
+    ax1.set_xlabel('Norm magnitude', fontsize=16)
+    ax1.set_ylabel('Density', fontsize=16)
+    ax1.set_title(f'{model1_name}', fontsize=18, fontweight='bold')
+    ax1.tick_params(labelsize=14)
     ax1.grid(True, alpha=0.3)
 
     # Model 2
@@ -362,9 +368,10 @@ def _plot_sidebyside_comparison(
                 color='coral', edgecolor='black', linewidth=0.5)
 
     model2_name = _format_model_name(metadata2.get('activation', 'unknown'))
-    ax2.set_xlabel('Norm magnitude', fontsize=11)
-    ax2.set_ylabel('Normalized Density', fontsize=11)
-    ax2.set_title(f'{model2_name}', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Norm magnitude', fontsize=16)
+    ax2.set_ylabel('Density', fontsize=16)
+    ax2.set_title(f'{model2_name}', fontsize=18, fontweight='bold')
+    ax2.tick_params(labelsize=14)
     ax2.grid(True, alpha=0.3)
 
     # Match x-axis ranges with trimming
@@ -384,7 +391,7 @@ def _plot_sidebyside_comparison(
     fig.suptitle(
         f"Layer {layer_idx}, Irrep {freq} - {dataset}\n"
         f"Comparison: {model1_name} vs {model2_name}",
-        fontsize=14, fontweight='bold'
+        fontsize=20, fontweight='bold'
     )
 
     plt.tight_layout()
@@ -433,19 +440,20 @@ def _plot_overlay_comparison(
         x_min, x_max = _get_trimmed_xlim(bins1, counts1, bins2, counts2)
         ax.set_xlim(x_min, x_max)
 
-    ax.set_xlabel('Norm magnitude', fontsize=12)
-    ax.set_ylabel('Normalized Density', fontsize=12)
-    ax.legend(loc='upper right', fontsize=11)
+    ax.set_xlabel('Norm magnitude', fontsize=16)
+    ax.set_ylabel('Density', fontsize=16)
+    ax.legend(loc='upper right', fontsize=14)
+    ax.tick_params(labelsize=14)
     ax.grid(True, alpha=0.3)
 
     # Add text labels at bottom of plot
     y_min, y_max = ax.get_ylim()
     text_y = -0.15 * y_max  # Below the plot
     ax.text(0.25, text_y, model1_label,
-            transform=ax.transAxes, fontsize=11, color='steelblue',
+            transform=ax.transAxes, fontsize=14, color='steelblue',
             ha='center', weight='bold')
     ax.text(0.75, text_y, model2_label,
-            transform=ax.transAxes, fontsize=11, color='coral',
+            transform=ax.transAxes, fontsize=14, color='coral',
             ha='center', weight='bold')
 
     # Overall title
@@ -453,7 +461,7 @@ def _plot_overlay_comparison(
     ax.set_title(
         f"Layer {layer_idx}, Irrep {freq} - {dataset}\n"
         f"Comparison: {model1_label} vs {model2_label}",
-        fontsize=13, fontweight='bold'
+        fontsize=18, fontweight='bold'
     )
 
     plt.tight_layout()
@@ -542,9 +550,10 @@ def _plot_grid_comparison(
             x_min, x_max = _get_trimmed_xlim(bins1, counts1, bins2, counts2)
             ax.set_xlim(x_min, x_max)
 
-        ax.set_title(f'L{layer_idx}, I{freq}', fontsize=10, fontweight='bold')
-        ax.set_xlabel('Norm', fontsize=9)
-        ax.set_ylabel('Normalized Density', fontsize=9)
+        ax.set_title(f'L{layer_idx}, I{freq}', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Norm', fontsize=12)
+        ax.set_ylabel('Density', fontsize=12)
+        ax.tick_params(labelsize=11)
         ax.grid(True, alpha=0.3)
 
     # Hide unused subplots
@@ -556,7 +565,7 @@ def _plot_grid_comparison(
     fig.suptitle(
         f"{dataset} - Comparison: {model1_name} vs {model2_name}\n"
         f"All Layers and Irreps",
-        fontsize=15, fontweight='bold'
+        fontsize=20, fontweight='bold'
     )
 
     # Add legend at the bottom of the figure
@@ -566,7 +575,7 @@ def _plot_grid_comparison(
         Patch(facecolor='coral', edgecolor='darkred', alpha=0.5, label=model2_name)
     ]
     fig.legend(handles=legend_elements, loc='lower center', ncol=2,
-               fontsize=12, frameon=True, bbox_to_anchor=(0.5, -0.02))
+               fontsize=16, frameon=True, bbox_to_anchor=(0.5, -0.02))
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.96])  # Leave space for legend and title
     _save_figure(output_path, format_choice, dpi)
