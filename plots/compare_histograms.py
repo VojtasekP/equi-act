@@ -562,11 +562,11 @@ def _plot_grid_comparison(
 
     # Overall title
     dataset = _format_dataset_name(metadata1.get('dataset', 'unknown'))
-    fig.suptitle(
-        f"{dataset} - Comparison: {model1_name} vs {model2_name}\n"
-        f"All Layers and Irreps",
-        fontsize=20, fontweight='bold'
-    )
+    # fig.suptitle(
+    #     f"{dataset} - Comparison: {model1_name} vs {model2_name}\n"
+    #     f"All Layers and Irreps",
+    #     fontsize=20, fontweight='bold'
+    # )
 
     # Add legend at the bottom of the figure
     from matplotlib.patches import Patch
