@@ -30,3 +30,6 @@ colorectal_hist/
 eurosat/
 mnist_rotation_new/
 dataset_cache/
+
+#claude
+.claude/
