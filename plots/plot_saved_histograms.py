@@ -55,6 +55,194 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _compute_histogram_statistics(bins: np.ndarray, counts: np.ndarray) -> Dict:
+    """
+    Compute statistics from histogram data.
+
+    Returns:
+        Dict with 'mass_at_zero', 'mean', 'median', 'total_mass'
+    """
+    if len(bins) == 0 or len(counts) == 0:
+        return {'mass_at_zero': np.nan, 'mean': np.nan, 'median': np.nan, 'total_mass': 0}
+
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    bin_widths = np.diff(bins)
+
+    # Total mass (integral of histogram)
+    total_mass = np.sum(counts * bin_widths)
+
+    if total_mass == 0:
+        return {'mass_at_zero': np.nan, 'mean': np.nan, 'median': np.nan, 'total_mass': 0}
+
+    # Mass at zero: find the bin containing 0 and compute its contribution
+    # For density histograms, we need to compute the probability mass in the zero bin
+    zero_bin_idx = np.searchsorted(bins, 0, side='right') - 1
+    if zero_bin_idx < 0:
+        zero_bin_idx = 0
+    if zero_bin_idx >= len(counts):
+        zero_bin_idx = len(counts) - 1
+
+    # Mass at zero bin as percentage
+    zero_bin_mass = counts[zero_bin_idx] * bin_widths[zero_bin_idx]
+    mass_at_zero_pct = (zero_bin_mass / total_mass) * 100
+
+    # Mean: weighted average of bin centers
+    mean = np.sum(bin_centers * counts * bin_widths) / total_mass
+
+    # Median: find the value where cumulative mass reaches 50%
+    cumulative_mass = np.cumsum(counts * bin_widths)
+    median_idx = np.searchsorted(cumulative_mass, total_mass / 2)
+    if median_idx >= len(bin_centers):
+        median_idx = len(bin_centers) - 1
+    median = bin_centers[median_idx]
+
+    return {
+        'mass_at_zero': mass_at_zero_pct,
+        'mean': mean,
+        'median': median,
+        'total_mass': total_mass
+    }
+
+
+def _print_statistics_table(
+    histograms: Dict[int, Dict[int, Tuple[np.ndarray, np.ndarray]]],
+    metadata: Dict
+):
+    """
+    Print a table of statistics for all histograms.
+    """
+    print("\n" + "=" * 80)
+    print("DISTRIBUTION STATISTICS")
+    print("=" * 80)
+
+    # Collect all frequencies
+    all_freqs = set()
+    for layer_idx in histograms:
+        all_freqs.update(histograms[layer_idx].keys())
+    freqs = sorted(all_freqs)
+
+    # Print header
+    print(f"\n{'Layer':<8} {'Irrep':<8} {'Mass@0 (%)':<12} {'Mean':<12} {'Median':<12}")
+    print("-" * 52)
+
+    # Print statistics for each layer and frequency
+    for layer_idx in sorted(histograms.keys()):
+        for freq in freqs:
+            if freq not in histograms[layer_idx]:
+                continue
+
+            bins, counts = histograms[layer_idx][freq]
+            stats = _compute_histogram_statistics(bins, counts)
+
+            print(f"{layer_idx:<8} {freq:<8} {stats['mass_at_zero']:<12.2f} "
+                  f"{stats['mean']:<12.3f} {stats['median']:<12.3f}")
+
+    print("-" * 52)
+
+    # Summary by layer (averaged over irreps)
+    print("\nSummary by Layer (averaged over irreps):")
+    print(f"{'Layer':<8} {'Avg Mass@0 (%)':<16} {'Avg Mean':<12} {'Avg Median':<12}")
+    print("-" * 48)
+
+    for layer_idx in sorted(histograms.keys()):
+        masses = []
+        means = []
+        medians = []
+        for freq in freqs:
+            if freq not in histograms[layer_idx]:
+                continue
+            bins, counts = histograms[layer_idx][freq]
+            stats = _compute_histogram_statistics(bins, counts)
+            if not np.isnan(stats['mass_at_zero']):
+                masses.append(stats['mass_at_zero'])
+                means.append(stats['mean'])
+                medians.append(stats['median'])
+
+        if masses:
+            print(f"{layer_idx:<8} {np.mean(masses):<16.2f} {np.mean(means):<12.3f} {np.mean(medians):<12.3f}")
+
+    print("=" * 80 + "\n")
+
+
+def _save_statistics_latex(
+    histograms: Dict[int, Dict[int, Tuple[np.ndarray, np.ndarray]]],
+    metadata: Dict,
+    output_path: Path
+):
+    """
+    Save statistics as a LaTeX table.
+    """
+    # Collect all frequencies
+    all_freqs = set()
+    for layer_idx in histograms:
+        all_freqs.update(histograms[layer_idx].keys())
+    freqs = sorted(all_freqs)
+
+    dataset = metadata.get('dataset', 'unknown')
+    activation = metadata.get('activation', 'unknown')
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, 'w') as f:
+        f.write("% Distribution Statistics\n")
+        f.write(f"% Dataset: {dataset}, Activation: {activation}\n\n")
+
+        # Main table
+        f.write("\\begin{table}[htbp]\n")
+        f.write("\\centering\n")
+        f.write(f"\\caption{{Distribution statistics for {activation} on {dataset}}}\n")
+        f.write(f"\\label{{tab:dist_stats_{dataset}_{activation}}}\n")
+        f.write("\\begin{tabular}{cc|ccc}\n")
+        f.write("\\toprule\n")
+        f.write("Layer & Irrep & Mass@0 (\\%) & Mean & Median \\\\\n")
+        f.write("\\midrule\n")
+
+        # Data rows
+        for layer_idx in sorted(histograms.keys()):
+            for freq in freqs:
+                if freq not in histograms[layer_idx]:
+                    continue
+
+                bins, counts = histograms[layer_idx][freq]
+                stats = _compute_histogram_statistics(bins, counts)
+
+                f.write(f"{layer_idx} & {freq} & "
+                        f"{stats['mass_at_zero']:.2f} & "
+                        f"{stats['mean']:.3f} & "
+                        f"{stats['median']:.3f} \\\\\n")
+
+        f.write("\\midrule\n")
+
+        # Summary rows (averaged over irreps per layer)
+        f.write("\\multicolumn{2}{c|}{\\textbf{Average by Layer}} & & & \\\\\n")
+
+        for layer_idx in sorted(histograms.keys()):
+            masses = []
+            means = []
+            medians = []
+            for freq in freqs:
+                if freq not in histograms[layer_idx]:
+                    continue
+                bins, counts = histograms[layer_idx][freq]
+                stats = _compute_histogram_statistics(bins, counts)
+                if not np.isnan(stats['mass_at_zero']):
+                    masses.append(stats['mass_at_zero'])
+                    means.append(stats['mean'])
+                    medians.append(stats['median'])
+
+            if masses:
+                f.write(f"{layer_idx} & -- & "
+                        f"{np.mean(masses):.2f} & "
+                        f"{np.mean(means):.3f} & "
+                        f"{np.mean(medians):.3f} \\\\\n")
+
+        f.write("\\bottomrule\n")
+        f.write("\\end{tabular}\n")
+        f.write("\\end{table}\n")
+
+    print(f"Saved LaTeX table: {output_path}")
+
+
 def _load_histogram_data(npz_path: Path) -> Tuple[Dict, Dict[int, Dict[int, Tuple[np.ndarray, np.ndarray]]]]:
     """
     Load histogram data from .npz file.
@@ -410,6 +598,16 @@ def main():
     for layer_idx in sorted(histograms.keys()):
         freqs = sorted(histograms[layer_idx].keys())
         print(f"  Layer {layer_idx}: frequencies {freqs}")
+
+    # Print statistics table
+    _print_statistics_table(histograms, metadata)
+
+    # Save LaTeX table
+    tex_output_dir = Path("plots/tex_outputs")
+    dataset = metadata.get('dataset', 'unknown')
+    activation = metadata.get('activation', 'unknown')
+    tex_path = tex_output_dir / f"dist_stats_{dataset}_{activation}.tex"
+    _save_statistics_latex(histograms, metadata, tex_path)
 
     output_dir = Path(args.output_dir)
     base_name = input_path.stem  # filename without .npz
