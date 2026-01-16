@@ -13,11 +13,6 @@ from typing import Dict, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Set Times New Roman as the default font (with fallbacks)
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['font.serif'] = ['Times New Roman', 'DejaVu Serif', 'Liberation Serif', 'Times']
-plt.rcParams['mathtext.fontset'] = 'stix'  # STIX fonts are similar to Times
-
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -862,8 +857,8 @@ def _plot_grid_comparison(
             ax.set_xlim(x_min, x_max)
 
         ax.set_title(f'L{layer_idx}, I{freq}', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Norm', fontsize=12)
-        ax.set_ylabel('Density', fontsize=12)
+        ax.set_xlabel('Norm', fontsize=14)
+        ax.set_ylabel('Density', fontsize=14)
         ax.tick_params(labelsize=11)
         ax.grid(True, alpha=0.3)
 
