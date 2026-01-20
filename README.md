@@ -1,6 +1,9 @@
-# Equi-Act: Equivariant Neural Networks for Image Classification
+# Activation and normalization layers in equivariant neural networks
+
+> Research task for FNSPE CTU in Prague.
 
 Implementation of rotation-equivariant CNNs using the `escnn` library. Explores various equivariant activation functions (gated, norm-based, Fourier) and batch normalization strategies.
+
 
 ## Installation
 
@@ -22,9 +25,11 @@ src/
 │   ├── RnNet.py                 # Equivariant architectures (R2Net, R3Net, PointNet variants)
 │   ├── baseline_resnet.py       # ResNet18 baseline
 │   ├── new_layers.py            # Custom layers (NormBN, FourierBN)
+│   ├── calculate_channels.py    # Channel width computation
 │   └── equivariance_metric.py   # Equivariance error functions
 ├── datasets_utils/
-│   └── data_classes.py          # DataModules (MNIST, EuroSAT, Colorectal, Resisc45)
+│   ├── data_classes.py          # DataModules (MNIST, EuroSAT, Colorectal, Resisc45)
+│   └── mnist_download.py        # Rotated MNIST download
 └── sweeps_configs/              # WandB hyperparameter sweep configs
 
 tables/
@@ -32,8 +37,6 @@ tables/
 ├── tex_outputs/                 # Generated LaTeX tables
 ├── ds_acc_results.py            # Fetch results from WandB
 └── generate_latex_tables.py     # Create LaTeX tables
-
-figures/                         # Thesis figures
 ```
 
 ## Training
