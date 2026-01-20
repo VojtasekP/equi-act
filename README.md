@@ -1,63 +1,107 @@
-# equi-act
+# Equi-Act: Equivariant Neural Networks for Image Classification
 
-## Setup (Python 3.10)
-### Recommended (uv)
+Implementation of rotation-equivariant CNNs using the `escnn` library. Explores various equivariant activation functions (gated, norm-based, Fourier) and batch normalization strategies.
+
+## Installation
+
+**Requires Python 3.10**
+
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv
-uv sync --python 3.10                             # create .venv with Python 3.10 and install deps
+curl -LsSf https://astral.sh/uv/install.sh | sh   # install uv (if not installed)
+uv sync --python 3.10                             # create venv and install dependencies
 source .venv/bin/activate
 ```
 
-### Pip
-```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+## Project Structure
 
-### Conda
-```bash
-conda env create -f env.yml   # env.yml pins python=3.10
-conda activate equi-act
-```
-## Run
-Main script in src/train.py
-```bash
-python src/train.py \
-  --dataset <mnist_rot|resisc45|colorectal_hist|eurosat> \
-  --activation_type <see below> \
-  --bn <IIDbn|Normbn|FieldNorm|GNormBatchNorm> \
-  [--train_subset_fraction 0.5] \
-  [--flip True] \
-  [--precision 16-mixed] \
-  # and other flags
-```
-
-Quick samples to start:
-```bash
-# Rotated MNIST
-python src/train.py --dataset mnist_rot --batch_size 64 --activation_type gated_sigmoid --bn Normbn
-
-# EuroSAT with 25% train split
-python src/train.py --dataset eurosat --train_subset_fraction 0.25 --activation_type fourier_relu_16 --bn Normbn
-
-# Resisc45 with flips
-python src/train.py --dataset resisc45 --flip True --activation_type gated_shared_sigmoid --bn IIDbn
-```
-
-## Choices
-- `--dataset`: mnist_rot, resisc45, colorectal_hist, eurosat (`--train_subset_fraction` in (0,1] for smaller train set size)
-- `--activation_type`: gated_sigmoid, gated_shared_sigmoid, norm_relu, norm_squash, fourier_relu_{4,8,16,32}, fourier_elu_{4,8,16,32}, non_equi_relu, non_equi_bn
-- `--bn`: IIDbn, Normbn, FieldNorm, GNormBatchNorm
-
-Other flags: invariance logging (`--invar_error_logging`, `--invar_check_every_n_epochs`, `--num_of_angles`, `--num_of_batches_to_use_for_invar_logging`), export paths (`--model_export_dir`, `--model_export_subdir`), W&B project name (`--project`).
-
-## Project structure (key bits)
 ```
 src/
-  train.py                 # Lightning training script / CLI entrypoint
-  nets/RnNet.py            # R2Net architecture and layers
-  datasets_utils/
-    data_classes.py        # LightningDataModules for mnist_rot, resisc45, colorectal_hist, eurosat
-    mnist_download.py      # Helper to fetch rotated MNIST
+├── train.py                     # Main training entrypoint
+├── invariance_test.py           # Post-training invariance evaluation
+├── nets/
+│   ├── RnNet.py                 # Equivariant architectures (R2Net, R3Net, PointNet variants)
+│   ├── baseline_resnet.py       # ResNet18 baseline
+│   ├── new_layers.py            # Custom layers (NormBN, FourierBN)
+│   └── equivariance_metric.py   # Equivariance error functions
+├── datasets_utils/
+│   └── data_classes.py          # DataModules (MNIST, EuroSAT, Colorectal, Resisc45)
+└── sweeps_configs/              # WandB hyperparameter sweep configs
+
+tables/
+├── csv_outputs/                 # Experiment results
+├── tex_outputs/                 # Generated LaTeX tables
+├── ds_acc_results.py            # Fetch results from WandB
+└── generate_latex_tables.py     # Create LaTeX tables
+
+figures/                         # Thesis figures
 ```
+
+## Training
+
+```bash
+python src/train.py --dataset mnist_rot --activation_type fourierbn_relu_16 --bn Normbn
+```
+
+### Datasets
+
+`--dataset`: `mnist_rot` | `eurosat` | `colorectal_hist` | `resisc45`
+
+### Activation Types
+
+| Category | Options |
+|----------|---------|
+| Gated | `gated_sigmoid`, `gated_shared_sigmoid` |
+| Norm-based | `norm_relu`, `norm_squash`, `normbn_relu`, `normbnvec_relu` |
+| Fourier | `fourier_relu_{4,8,16,32}`, `fourierbn_relu_{8,16,32,64,128}` |
+| Non-equivariant | `non_equi_relu`, `non_equi_bn` |
+
+### Key Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--model_type` | `equivariant`, `resnet18`, `pointcloud` | `equivariant` |
+| `--bn` | `IIDbn`, `Normbn`, `FieldNorm`, `GNormBatchNorm` | `Normbn` |
+| `--max_rot_order` | Rotation discretization order | `3` |
+| `--flip` | Include reflections (O(2) vs SO(2)) | `False` |
+| `--epochs` | Training epochs | `30` |
+| `--batch_size` | Batch size | `4` |
+| `--lr` | Learning rate | `1e-3` |
+| `--train_subset_fraction` | Fraction of training data to use | `1.0` |
+| `--precision` | `32-true`, `16-mixed` | `32-true` |
+
+### Examples
+
+```bash
+# Fourier activation with inner batch norm
+python src/train.py --dataset mnist_rot --activation_type fourierbn_relu_16 --bn Normbn --epochs 50
+
+# Subset of training data
+python src/train.py --dataset eurosat --activation_type gated_sigmoid --train_subset_fraction 0.25
+
+# Baseline comparison
+python src/train.py --dataset mnist_rot --model_type resnet18
+```
+
+## Invariance Evaluation
+
+```bash
+python src/invariance_test.py --checkpoint saved_models/model.ckpt --dataset mnist_rot
+```
+
+## WandB Sweeps
+
+```bash
+wandb sweep src/sweeps_configs/sweep_mnist_final.yaml
+wandb agent <sweep_id>
+```
+
+## Results
+
+```bash
+python tables/ds_acc_results.py           # Fetch from WandB
+python tables/generate_latex_tables.py    # Generate LaTeX
+```
+
+---
+
+*This README was generated with [Claude Code](https://claude.ai/code).*
