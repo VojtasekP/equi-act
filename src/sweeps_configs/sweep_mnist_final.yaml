@@ -12,24 +12,26 @@ parameters:
     values: ["mnist_rot"]
   activation_type:
     values:
-      # - gated_sigmoid
-      # - gated_shared_sigmoid
-      # - norm_relu
-      # - norm_squash
-      # - fourier_relu_16
-      # - fourier_elu_16
-      # - normbn_relu
-      # - normbn_elu
-      # - normbn_sigmoid
-      # - normbnvec_relu
-      # - normbnvec_elu
-      # - normbnvec_sigmoid
-      # - fourierbn_elu_16
-      # - fourierbn_relu_64
-      - fourierbn_relu_128
-      - fourier_relu_128
-      # - fourierbn_relu_32
-      # - fourierbn_relu_16
+      - gated_sigmoid
+      - gated_shared_sigmoid
+      - norm_relu
+      - norm_squash
+      - norm_sigmoid
+      - norm_elu
+      - fourier_relu_16
+      - fourier_elu_16
+      - normbn_relu
+      - normbn_elu
+      - normbn_sigmoid
+      - normbnvec_relu
+      - normbnvec_elu
+      - normbnvec_sigmoid
+      - fourierbn_elu_16
+      - fourierbn_relu_64
+      # - fourierbn_relu_128
+      # - fourier_relu_128
+      - fourierbn_relu_8
+      - fourierbn_relu_16
     
   bn:
     values: ["Normbn"]
@@ -41,7 +43,7 @@ parameters:
     values: [false]
 
   aug:
-    values: [true]
+    values: [true, false]
   normalize:
     value: true
   residual:
@@ -98,5 +100,5 @@ parameters:
   model_export_dir:
     value: "saved_models/"
   model_export_subdir:
-    value: "mnist_rot_final/"
+    value: "mnist_rot_final_new/"
     

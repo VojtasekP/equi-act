@@ -12,13 +12,13 @@ parameters:
     values: ["eurosat"]
   activation_type:
     values:
-      - gated_sigmoid
-      - gated_shared_sigmoid
-      - norm_relu
-      - fourier_relu_16
-      - normbn_relu
-      - normbnvec_relu
-      - fourierbn_relu_16
+      # - gated_sigmoid
+      # - gated_shared_sigmoid
+      # - norm_relu
+      # - fourier_relu_16
+      # - normbn_relu
+      # - normbnvec_relu
+      - fourierbn_relu_32
   bn:
     values: ["Normbn"]
 
@@ -36,7 +36,7 @@ parameters:
   flip:
     values: [false]
   blocks:
-    value: [[16, 7, 3], [52, 5, 2], [69, 5, 2], [69, 5, 2], [103, 5, 2], [103, 5, 2]]
+    value: [[16, 7, 3], [24, 5, 2], [32, 5, 2], [32, 5, 2], [48, 5, 2], [64, 5, 2]]
   conv_sigma:
     value: 0.6
   pool_after_every_n_blocks:

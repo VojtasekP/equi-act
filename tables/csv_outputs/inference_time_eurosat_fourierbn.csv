@@ -1,0 +1,2 @@
+checkpoint,dataset,model_type,batch_size,num_samples,mean_time_ms,std_time_ms
+equivariant_eurosat_seed0_aug_fourierbn_relu_16_Normbn.ckpt,eurosat,equivariant,1,1000,5.543515,1.709339

@@ -1,0 +1,11 @@
+checkpoint,model_type,dataset,seed,activation,bn,aug,invariance
+resnet18_mnist_rot_seed0_aug_resnet_scratch.ckpt,resnet18,mnist_rot,0,resnet_scratch,,True,0.1914927363395691
+resnet18_mnist_rot_seed0_noaug_resnet_scratch.ckpt,resnet18,mnist_rot,0,resnet_scratch,,False,0.18584510684013367
+resnet18_mnist_rot_seed1_aug_resnet_scratch.ckpt,resnet18,mnist_rot,1,resnet_scratch,,True,0.19003725051879883
+resnet18_mnist_rot_seed1_noaug_resnet_scratch.ckpt,resnet18,mnist_rot,1,resnet_scratch,,False,0.18963469564914703
+resnet18_mnist_rot_seed2_aug_resnet_scratch.ckpt,resnet18,mnist_rot,2,resnet_scratch,,True,0.21485784649848938
+resnet18_mnist_rot_seed2_noaug_resnet_scratch.ckpt,resnet18,mnist_rot,2,resnet_scratch,,False,0.17628026008605957
+resnet18_mnist_rot_seed3_aug_resnet_scratch.ckpt,resnet18,mnist_rot,3,resnet_scratch,,True,0.22256708145141602
+resnet18_mnist_rot_seed3_noaug_resnet_scratch.ckpt,resnet18,mnist_rot,3,resnet_scratch,,False,0.18183903396129608
+resnet18_mnist_rot_seed4_aug_resnet_scratch.ckpt,resnet18,mnist_rot,4,resnet_scratch,,True,0.18404316902160645
+resnet18_mnist_rot_seed4_noaug_resnet_scratch.ckpt,resnet18,mnist_rot,4,resnet_scratch,,False,0.17606182396411896

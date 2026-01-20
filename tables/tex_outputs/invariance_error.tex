@@ -1,0 +1,38 @@
+\begin{table}[htbp]
+\centering
+\caption{Invariance Error across different models and datasets. Lower values indicate better rotation invariance. Results averaged over 5 seeds.}
+\label{tab:invariance_error}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lcccccc}
+\toprule
+Model & Colorectal Aug & Colorectal NoAug & EuroSAT Aug & EuroSAT NoAug & MNIST Aug & MNIST NoAug \\
+\midrule
+ResNet18 & 0.2831 & 0.4109 & 0.1683 & 0.3509 & 0.2006 & 0.1819 \\
+\midrule
+Fourier-Elu (N=16) & --- & --- & --- & --- & 0.0897 & 0.0961 \\
+Fourier-Relu (N=16) & 0.0939 & 0.1042 & 0.0740 & 0.0834 & 0.1005 & 0.1031 \\
+\midrule
+FourierBN-Elu (N=16) & --- & --- & --- & --- & 0.0970 & 0.0966 \\
+FourierBN-Relu (N=16) & 0.0769 & 0.0968 & 0.0643 & 0.0725 & 0.1148 & 0.1102 \\
+FourierBN-Relu (N=32) & 0.0780 & 0.0963 & 0.0637 & 0.0730 & 0.1183 & 0.1121 \\
+FourierBN-Relu (N=64) & --- & --- & --- & --- & 0.1145 & 0.1091 \\
+FourierBN-Relu (N=8) & --- & --- & --- & --- & 0.1201 & 0.1169 \\
+\midrule
+Split Gated-Sigmoid-shared & 0.0988 & 0.1233 & 0.0885 & 0.0976 & 0.1260 & 0.1228 \\
+Split Gated-Sigmoid & 0.1141 & 0.1439 & 0.1039 & 0.1178 & 0.1383 & 0.1405 \\
+\midrule
+Split Norm-Elu + ELU & --- & --- & --- & --- & 0.1249 & 0.1294 \\
+Split Norm-ReLU + ELU & 0.1947 & 0.1873 & 0.1216 & 0.1338 & 0.1764 & 0.1680 \\
+Split Norm-Sigmoid + ELU & --- & --- & --- & --- & 0.0910 & 0.0964 \\
+\midrule
+Unified Norm-BN-Elu & --- & --- & --- & --- & 0.2027 & 0.2057 \\
+Unified Norm-BN-Relu & 0.1678 & 0.1997 & 0.1452 & 0.1667 & 0.1546 & 0.1879 \\
+Unified Norm-BN-Sigmoid & --- & --- & --- & --- & 0.0467 & 0.0497 \\
+\midrule
+Split Norm-BN-Elu + ELU & --- & --- & --- & --- & 0.2034 & 0.2030 \\
+Split Norm-BN-Relu + ELU & 0.1516 & 0.1807 & 0.1395 & 0.1510 & 0.1973 & 0.1940 \\
+Split Norm-BN-Sigmoid + ELU & --- & --- & --- & --- & 0.0813 & 0.0827 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}

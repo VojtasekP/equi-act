@@ -1,4 +1,0 @@
-SO2_Nets
-SO3_Nets
-datasets_utils
-development

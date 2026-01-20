@@ -14,9 +14,10 @@ BN_KEY       = "bn"               # Common config key
 AUG_KEY      = "aug"              # Indicates whether augmentation was used
 MODEL_KEY    = "model_type"
 only_noflip  = True
-OUT_CSV      = "Results.csv"
+OUT_CSV      = "tables/csv_outputs/Results.csv"
 TRAIN_TIME_KEYS = ["train_time", "_runtime"]  # Try both explicit metric and wandb runtime (seconds)
 SEED_KEYS    = ["seed"]
+PARAM_KEYS   = ["model/num_trainable_params", "num_trainable_params"]  # Model parameter count
 # =================================
 
 api = wandb.Api(timeout=60)
@@ -37,6 +38,16 @@ def _extract_seed(cfg):
         if key in cfg:
             return cfg.get(key)
     return None
+
+def _extract_num_params(summary_dict):
+    """Return the number of trainable parameters from the summary."""
+    for key in PARAM_KEYS:
+        if key in summary_dict and summary_dict.get(key) is not None:
+            try:
+                return int(summary_dict.get(key))
+            except Exception:
+                return np.nan
+    return np.nan
 
 def fetch_runs():
     """Pull runs from the unified project once to avoid repeated API calls."""
@@ -73,6 +84,7 @@ def get_dataset_rows(dataset_name, runs):
             "seed":       _extract_seed(cfg),
             "test_acc":   summ.get("test_acc", np.nan),
             "train_time_minutes": _extract_train_time_minutes(summ),  # already in minutes
+            "num_params": _extract_num_params(summ),
         })
 
     df = pd.DataFrame(rows)
@@ -104,11 +116,15 @@ sort_cols = [DATASET_KEY, MODEL_KEY, "activation", BN_KEY, AUG_KEY, "seed"]
 final_df = final_df.sort_values(sort_cols, na_position="last")
 numeric_cols = list(final_df.select_dtypes(include=[np.number]).columns)
 time_cols = [c for c in numeric_cols if "train_time" in c]
-acc_cols = [c for c in numeric_cols if c not in time_cols]
+param_cols = [c for c in numeric_cols if "num_params" in c]
+acc_cols = [c for c in numeric_cols if c not in time_cols and c not in param_cols]
 if acc_cols:
-    final_df[acc_cols] = final_df[acc_cols].round(4)
+    final_df[acc_cols] = final_df[acc_cols].round(6)
 if time_cols:
     final_df[time_cols] = final_df[time_cols].round(2)  # minutes rounded to 2 decimals
+if param_cols:
+    # Keep num_params as integers (no decimal places)
+    final_df[param_cols] = final_df[param_cols].fillna(0).astype(int)
 
 # 5. Save
 Path(OUT_CSV).parent.mkdir(parents=True, exist_ok=True)

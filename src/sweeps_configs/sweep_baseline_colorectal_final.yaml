@@ -9,18 +9,18 @@ parameters:
   project:
     value: "baseline_resnet18"
   dataset:
-    values: ["colorectal_hist"]
+    values: ["colorectal_hist", "eurosat", "mnist_rot"]
   model_type:
     value: "resnet18"
   baseline_pretrained:
     values: [false]
   aug:
-    values: [false, true]
+    values: [false]
   seed:
     values: [0, 1, 2, 3, 4]
 
   lr:
-    value: 0.0002
+    value: 0.0001
 
   weight_decay:
     value: 0.001

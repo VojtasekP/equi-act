@@ -10,6 +10,7 @@ ACT_MAP = {
     "norm_relu": "n_relu",
     "norm_sigmoid": "n_sigmoid",
     "norm_softplus": "n_softplus",
+    "norm_elu": "n_elu",
     "norm_squash": "squash",
     "pointwise_relu": "p_relu",
     "pointwise_elu": "p_elu",
@@ -59,7 +60,20 @@ class RetypeModule(nn.EquivariantModule):
         self.out_type = out_type
 
     def forward(self, input: nn.GeometricTensor) -> nn.GeometricTensor:
-        return nn.GeometricTensor(input.tensor, self.out_type)
+        # Handle both grid tensors and point cloud tensors
+        # Point clouds have coords attribute, grids don't
+        if hasattr(input, 'coords') and input.coords is not None:
+            # Point cloud mode: preserve coordinates
+            output = nn.GeometricTensor(input.tensor, self.out_type, input.coords)
+            # Preserve edge_index and edge_delta if present
+            if hasattr(input, 'edge_index'):
+                output.edge_index = input.edge_index
+            if hasattr(input, 'edge_delta'):
+                output.edge_delta = input.edge_delta
+            return output
+        else:
+            # Grid mode: no coordinates
+            return nn.GeometricTensor(input.tensor, self.out_type)
     
     def evaluate_output_shape(self, input_shape):
         return input_shape
@@ -139,7 +153,6 @@ class PointCloudSequentialModule(nn.SequentialModule):
 
         # Preserve coords through the forward pass
         coords = getattr(input, 'coords', None)
-        print(x.shape)
         for m in self._modules.values():
             if self._is_point_conv(m):
                 # Point conv: pass edge_index explicitly
@@ -150,7 +163,6 @@ class PointCloudSequentialModule(nn.SequentialModule):
             else:
                 # Regular module: standard call
                 x = m(x)
-            print(x.shape)
             # Preserve all metadata on output
             if coords is not None and not hasattr(x, 'coords'):
                 x.coords = coords
@@ -259,10 +271,10 @@ class RnNet(ABC, torch.nn.Module):
         self.activation_type = activation_type
         # here might confusion arise as we added non_equi_bn to activation types, even that it is gated sigmoid with classical nonequi batch norm. This decision was made purly out of implementational ease
         
-        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu", "gated_shared_sigmoid", "non_equi_relu", "non_equi_bn", "normbn_relu", "normbn_elu", "normbn_sigmoid", "normbnvec_relu", "normbnvec_elu", "normbnvec_sigmoid",  "fourierbn_elu", "fourierbn_relu"]
+        assert activation_type in ["gated_sigmoid", "norm_relu", "norm_squash", "fourier_relu", "fourier_elu", "pointwise_relu", "gated_shared_sigmoid", "non_equi_relu", "non_equi_bn", "normbn_relu", "norm_sigmoid", "norm_elu", "normbn_elu", "normbn_sigmoid", "normbnvec_relu", "normbnvec_elu", "normbnvec_sigmoid",  "fourierbn_elu", "fourierbn_relu"]
         if activation_type == "gated_sigmoid":
             build_layer = self.make_gated_block
-        elif activation_type in ["norm_relu", "norm_squash", "norm_sigmoid"]:
+        elif activation_type in ["norm_relu", "norm_squash", "norm_sigmoid", "norm_elu"]:
             build_layer = self.make_norm_block
         elif activation_type in ["fourier_relu", "fourier_elu"]:
             build_layer = self.make_fourier_block
@@ -1043,11 +1055,15 @@ class R2PointNet(R2NetBase):
 
         # Validate activation type for point clouds
         valid_activations = ['fourier_relu_4', 'fourier_relu_8', 'fourier_relu_16', 'fourier_relu_32',
-                            'fourier_elu_4', 'fourier_elu_8', 'fourier_elu_16', 'fourier_elu_32']
+                            'fourier_elu_4', 'fourier_elu_8', 'fourier_elu_16', 'fourier_elu_32',
+                            'fourierbn_relu_4', 'fourierbn_relu_8', 'fourierbn_relu_16', 'fourierbn_relu_32',
+                            'fourierbn_relu_64', 'fourierbn_relu_128',
+                            'fourierbn_elu_4', 'fourierbn_elu_8', 'fourierbn_elu_16', 'fourierbn_elu_32',
+                            'fourierbn_elu_64', 'fourierbn_elu_128']
         if activation_type not in valid_activations:
             raise ValueError(
-                f"Point cloud networks only support fourier_relu_* and fourier_elu_* activation types. "
-                f"Got: {activation_type}. BatchNorm-based activations are incompatible with "
+                f"Point cloud networks only support fourier_* and fourierbn_* activation types. "
+                f"Got: {activation_type}. Other activation types use BatchNorm which is incompatible with "
                 f"point cloud data shapes (2D tensors vs. required 4D/5D grid tensors). "
                 f"Valid options: {valid_activations}"
             )
@@ -1201,11 +1217,15 @@ class R3PointNet(RnNet):
 
         # Validate activation type for point clouds
         valid_activations = ['fourier_relu_4', 'fourier_relu_8', 'fourier_relu_16', 'fourier_relu_32',
-                            'fourier_elu_4', 'fourier_elu_8', 'fourier_elu_16', 'fourier_elu_32']
+                            'fourier_elu_4', 'fourier_elu_8', 'fourier_elu_16', 'fourier_elu_32',
+                            'fourierbn_relu_4', 'fourierbn_relu_8', 'fourierbn_relu_16', 'fourierbn_relu_32',
+                            'fourierbn_relu_64', 'fourierbn_relu_128',
+                            'fourierbn_elu_4', 'fourierbn_elu_8', 'fourierbn_elu_16', 'fourierbn_elu_32',
+                            'fourierbn_elu_64', 'fourierbn_elu_128']
         if activation_type not in valid_activations:
             raise ValueError(
-                f"Point cloud networks only support fourier_relu_* and fourier_elu_* activation types. "
-                f"Got: {activation_type}. BatchNorm-based activations are incompatible with "
+                f"Point cloud networks only support fourier_* and fourierbn_* activation types. "
+                f"Got: {activation_type}. Other activation types use BatchNorm which is incompatible with "
                 f"point cloud data shapes (2D tensors vs. required 4D/5D/6D grid tensors). "
                 f"Valid options: {valid_activations}"
             )

@@ -588,6 +588,7 @@ def _train_impl(config):
                                        aug=config.aug,
                                        normalize=config.normalize)
         grey_scale = False
+        mnist = True  # Use MNIST channel scaling for consistent architecture
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
@@ -825,7 +826,7 @@ if __name__ == "__main__":
     parser.add_argument("--residual", type=bool, default=False, help="Enable residual connections between blocks.")
     parser.add_argument("--save", type=bool, default=True, help="If true, save best checkpoint and export copy.")
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=0)
     parser.add_argument("--label_smoothing", type=float, default=0.0,

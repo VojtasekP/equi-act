@@ -1,0 +1,3 @@
+checkpoint,dataset,model_type,batch_size,num_samples,mean_time_ms,std_time_ms
+equivariant_mnist_rot_seed0_aug_fourierbn_relu_16_Normbn.ckpt,mnist_rot,equivariant,1,1000,6.145854,1.316179
+equivariant_colorectal_hist_seed0_aug_fourierbn_relu_16_Normbn.ckpt,colorectal_hist,equivariant,1,1000,7.583999,2.156964

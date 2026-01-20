@@ -160,7 +160,7 @@ class MnistRotDataModule(L.LightningDataModule):
             indices = indices[:subset_size]
 
         n_total = len(indices)
-        n_train = int(0.8 * n_total)
+        n_train = int(10000)
         n_val = n_total - n_train
         train_indices = indices[:n_train]
         val_indices = indices[n_train:]

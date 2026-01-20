@@ -31,6 +31,7 @@ from datasets_utils.data_classes import (
 )
 import nets.equivariance_metric as em
 from train import LitHnn
+from nets.baseline_resnet import LitResNet18
 
 _DATASET_PREFIXES = ["mnist_rot", "resisc45", "colorectal_hist", "eurosat"]
 _BN_NAMES = {"IIDbn", "Normbn"}
@@ -59,7 +60,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-angles",
         type=int,
-        default=16,
+        default=72,
         help="Number of rotation angles for the invariance metric.",
     )
     parser.add_argument(
@@ -101,11 +102,17 @@ def _parse_checkpoint_filename(stem: str) -> Dict:
       equivariant_mnist_rot_seed0_aug_fourierbn_elu_16_Normbn
       equivariant_mnist_rot_seed1_noaug_normbnvec_relu
       resnet18_eurosat_seed0_aug
+      resnet18_mnist_rot_seed0_aug_resnet_scratch
     """
     parts = stem.split("_")
     model_type = parts[0] if parts else "unknown"
 
-    dataset = next((p for p in _DATASET_PREFIXES if p in parts), None)
+    # Check for dataset names (some contain underscores like mnist_rot, colorectal_hist)
+    dataset = None
+    for ds_prefix in _DATASET_PREFIXES:
+        if ds_prefix in stem:
+            dataset = ds_prefix
+            break
     seed_part = next((p for p in parts if p.startswith("seed")), None)
     seed = int(seed_part.replace("seed", "")) if seed_part else None
 
@@ -118,8 +125,10 @@ def _parse_checkpoint_filename(stem: str) -> Dict:
     activation = None
     normalization = None
     if dataset:
-        dataset_idx = parts.index(dataset)
-        tail = [p for p in parts[dataset_idx + 1 :] if p not in {"aug", "noaug"} and not p.startswith("seed")]
+        # For multi-word datasets (like mnist_rot), find the position after the dataset name in the original stem
+        dataset_end_idx = stem.find(dataset) + len(dataset)
+        tail_str = stem[dataset_end_idx + 1:] if dataset_end_idx + 1 < len(stem) else ""
+        tail = [p for p in tail_str.split("_") if p not in {"aug", "noaug", ""} and not p.startswith("seed")]
         if tail:
             if tail[-1] in _BN_NAMES:
                 normalization = tail[-1]
@@ -149,7 +158,7 @@ def _collect_checkpoints(models_dir: Path) -> List[Dict]:
 
 
 def _extract_metadata(entry: Dict) -> Dict:
-    ckpt = torch.load(entry["path"], map_location="cpu")
+    ckpt = torch.load(entry["path"], map_location="cpu", weights_only=False)
     hparams = ckpt.get("hyper_parameters", {})
     dataset = _get_hparam(hparams, "dataset", entry.get("dataset"))
     return {
@@ -227,23 +236,46 @@ def _prepare_eval_batch(datamodule, max_samples: int) -> torch.Tensor:
 
 
 def _compute_invariance(
-    lit_model: LitHnn,
+    lit_model,  # Union[LitHnn, LitResNet18]
     batch: torch.Tensor,
     device: torch.device,
     num_angles: int,
     chunk_size: int,
 ) -> float:
+    """Compute invariance error, routing to appropriate function based on model type."""
     lit_model.eval()
-    lit_model.model.eval()
+    if hasattr(lit_model, 'model'):
+        model = lit_model.model
+    else:
+        model = lit_model
+    model.eval()
+
     with torch.no_grad():
         batch_on_device = batch.to(device, non_blocking=True)
         lit_model.to(device)
-        _, errs = em.chech_invariance_batch_r2(
-            batch_on_device,
-            lit_model.model,
-            num_samples=num_angles,
-            chunk_size=chunk_size,
-        )
+
+        # Route to appropriate invariance function
+        if isinstance(lit_model, LitResNet18):
+            # ResNet18 baseline
+            _, errs = em.check_invariance_resnet(
+                batch_on_device,
+                lit_model,
+                num_samples=num_angles,
+                chunk_size=chunk_size,
+            )
+        elif hasattr(model, 'forward_invar_features') and hasattr(model, 'input_type'):
+            # Equivariant model
+            _, errs = em.chech_invariance_batch_r2(
+                batch_on_device,
+                model,
+                num_samples=num_angles,
+                chunk_size=chunk_size,
+            )
+        else:
+            raise ValueError(
+                f"Model type {type(lit_model).__name__} does not support invariance testing."
+            )
+
     return float(np.mean(errs))
 
 
@@ -294,9 +326,25 @@ def evaluate_checkpoints(
     for signature, metas in group_iter:
         # Initialize once from the first checkpoint in the group.
         base_meta = metas[0]
-        lit_model = LitHnn.load_from_checkpoint(base_meta["path"], map_location="cpu")
-        if not hasattr(lit_model.model, "forward_features"):
-            print(f"[WARN] Skipping group {signature}: model lacks equivariant features.")
+
+        # Try loading as equivariant model first
+        try:
+            lit_model = LitHnn.load_from_checkpoint(base_meta["path"], map_location="cpu")
+        except Exception:
+            # Try loading as ResNet18
+            try:
+                lit_model = LitResNet18.load_from_checkpoint(base_meta["path"], map_location="cpu")
+            except Exception as e:
+                print(f"[WARN] Skipping {base_meta['checkpoint_name']}: failed to load - {e}")
+                continue
+
+        # Verify model supports invariance testing
+        if isinstance(lit_model, LitResNet18):
+            if not hasattr(lit_model, 'forward_invar_features'):
+                print(f"[WARN] Skipping {base_meta['checkpoint_name']}: ResNet18 lacks forward_invar_features().")
+                continue
+        elif not (hasattr(lit_model, 'model') and hasattr(lit_model.model, 'forward_invar_features')):
+            print(f"[WARN] Skipping group {signature}: model not supported.")
             continue
 
         # Evaluate the first checkpoint (already loaded).
@@ -325,7 +373,7 @@ def evaluate_checkpoints(
 
         # Reuse the same model and just swap weights for the remaining checkpoints.
         for meta in metas[1:]:
-            ckpt = torch.load(meta["path"], map_location="cpu")
+            ckpt = torch.load(meta["path"], map_location="cpu", weights_only=False)
             state_dict = ckpt.get("state_dict")
             if state_dict is None:
                 print(f"[WARN] Skipping {meta['checkpoint_name']}: missing state_dict.")

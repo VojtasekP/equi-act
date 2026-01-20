@@ -1,0 +1,36 @@
+\begin{table}[htbp]
+\centering
+\caption{Number of Trainable Parameters across different models and datasets.}
+\label{tab:num_params}
+\begin{tabular}{lccc}
+\toprule
+Model & Colorectal & EuroSAT & MNIST \\
+\midrule
+ResNet18 & 11.18M & 11.18M & 11.18M \\
+\midrule
+Fourier-Elu (N=16) & --- & --- & 1.17M \\
+Fourier-Relu (N=16) & 371K & 1.24M & 1.17M \\
+\midrule
+FourierBN-Elu (N=16) & --- & --- & 1.17M \\
+FourierBN-Relu (N=16) & 371K & 1.24M & 1.17M \\
+FourierBN-Relu (N=32) & 371K & 1.24M & 1.17M \\
+FourierBN-Relu (N=64) & --- & --- & 1.17M \\
+FourierBN-Relu (N=8) & --- & --- & 1.17M \\
+\midrule
+Split Gated-Sigmoid-shared & 372K & 1.26M & 1.19M \\
+Split Gated-Sigmoid & 384K & 1.29M & 1.21M \\
+\midrule
+Split Norm-Elu + ELU & --- & --- & 1.17M \\
+Split Norm-ReLU + ELU & 372K & 1.24M & 1.17M \\
+Split Norm-Sigmoid + ELU & --- & --- & 1.17M \\
+\midrule
+Unified Norm-BN-Elu & --- & --- & 1.17M \\
+Unified Norm-BN-Relu & 372K & 1.24M & 1.17M \\
+Unified Norm-BN-Sigmoid & --- & --- & 1.17M \\
+\midrule
+Split Norm-BN-Elu + ELU & --- & --- & 1.17M \\
+Split Norm-BN-Relu + ELU & 372K & 1.24M & 1.17M \\
+Split Norm-BN-Sigmoid + ELU & --- & --- & 1.17M \\
+\bottomrule
+\end{tabular}
+\end{table}

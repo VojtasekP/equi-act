@@ -14,12 +14,14 @@ import argparse
 import csv
 import itertools
 import sys
+from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
+from torch.utils.data import Subset
 from tqdm import tqdm
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -56,7 +58,9 @@ _METRIC_COLUMNS: Tuple[Tuple[str, int | None], ...] = (
     ("error_metric_3layer", 3),
     ("error_metric_4layer", 4),
     ("error_metric_5layer", 5),
-    ("error_metric_6layer", 6)
+    ("error_metric_6layer", 6),
+    ("error_metric_7layer", 7),
+    ("error_metric_8layer", 8)
 )
 
 
@@ -118,6 +122,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Display tqdm progress bars while evaluating batches.",
     )
+    parser.add_argument(
+        "--stratified-samples",
+        type=int,
+        default=None,
+        help="Use stratified sampling with this many total samples from test set (distributed equally across classes). If not specified, uses all test data.",
+    )
     return parser.parse_args()
 
 
@@ -142,16 +152,50 @@ def _parse_checkpoint_filename(stem: str) -> Dict:
     if "_seed" not in stem:
         raise ValueError("missing '_seed' segment")
 
-    base, seed_str = stem.rsplit("_seed", 1)
-    seed = int(seed_str)
+    # Handle format: dataset_seedX_noaug_activation_bn or dataset_activation_bn_seedX
+    parts = stem.split("_seed")
+    if len(parts) != 2:
+        raise ValueError("unexpected _seed format")
 
+    before_seed = parts[0]
+    after_seed = parts[1]
+
+    # Extract seed number (first digits after _seed)
+    seed_match = after_seed.split("_")[0]
+    seed = int(seed_match)
+
+    # Remove seed number and get remaining parts
+    remaining = after_seed[len(seed_match):].lstrip("_")
+
+    # Handle noaug prefix if present
+    noaug_hint = False
+    if remaining.startswith("noaug_"):
+        noaug_hint = True
+        remaining = remaining[len("noaug_"):]
+
+    # Combine parts (before seed might be just dataset, remaining has activation_bn)
+    # or (before seed has dataset_activation_bn, remaining is empty/flip)
+    if remaining:
+        # Format: dataset_seedX_noaug_activation_bn
+        full_string = before_seed + "_" + remaining
+    else:
+        # Format: dataset_activation_bn_seedX
+        full_string = before_seed
+
+    # Extract dataset
     dataset = None
-    rest = base
+    rest = full_string
     for candidate in sorted(_DATASET_PREFIXES, key=len, reverse=True):
-        if rest.startswith(candidate):
-            dataset = candidate
-            rest = rest[len(candidate) :]
-            break
+        if candidate in rest:
+            # Handle both "equivariant_dataset" and "dataset" prefixes
+            if rest.startswith("equivariant_" + candidate):
+                dataset = candidate
+                rest = rest[len("equivariant_" + candidate):]
+                break
+            elif rest.startswith(candidate):
+                dataset = candidate
+                rest = rest[len(candidate):]
+                break
     if dataset is None:
         raise ValueError("dataset prefix not recognized")
 
@@ -225,6 +269,36 @@ def _build_datamodule(dataset: str, hparams, args: SimpleNamespace, seed_overrid
     raise ValueError(f"Unsupported dataset '{dataset}'.")
 
 
+def _get_stratified_indices(dataset, max_samples: int, seed: int = 42) -> List[int]:
+    """Get stratified sample indices ensuring equal representation per class."""
+    # Group indices by class
+    class_to_indices = defaultdict(list)
+    for idx in range(len(dataset)):
+        _, label = dataset[idx]
+        if isinstance(label, torch.Tensor):
+            label = label.item()
+        class_to_indices[label].append(idx)
+
+    # Calculate samples per class
+    num_classes = len(class_to_indices)
+    samples_per_class = max_samples // num_classes
+
+    # Sample from each class
+    rng = np.random.RandomState(seed)
+    stratified_indices = []
+    for class_label in sorted(class_to_indices.keys()):
+        indices = class_to_indices[class_label]
+        if len(indices) <= samples_per_class:
+            stratified_indices.extend(indices)
+        else:
+            sampled = rng.choice(indices, size=samples_per_class, replace=False)
+            stratified_indices.extend(sampled.tolist())
+
+    # Shuffle the final indices
+    rng.shuffle(stratified_indices)
+    return stratified_indices
+
+
 def _compute_curve(
     lit_model: LitHnn,
     datamodule,
@@ -235,6 +309,8 @@ def _compute_curve(
     *,
     layer: int | None = None,
     show_progress: bool = False,
+    stratified_samples: int | None = None,
+    seed: int = 42,
 ) -> Tuple[np.ndarray, np.ndarray]:
     if hasattr(datamodule, "prepare_data"):
         try:
@@ -242,7 +318,21 @@ def _compute_curve(
         except Exception:
             pass
     datamodule.setup("test")
-    loader = datamodule.test_dataloader()
+
+    # Get test dataset and optionally stratify
+    test_dataset = datamodule.test_dataloader().dataset
+    if stratified_samples is not None and stratified_samples > 0:
+        stratified_indices = _get_stratified_indices(test_dataset, stratified_samples, seed=seed)
+        test_dataset = Subset(test_dataset, stratified_indices)
+        print(f"Using stratified sample of {len(stratified_indices)} examples from test set")
+
+    # Create new dataloader with potentially stratified dataset
+    loader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=datamodule.test_dataloader().batch_size,
+        shuffle=False,
+        num_workers=0,
+    )
 
     curves: List[np.ndarray] = []
     theta_template: np.ndarray | None = None
@@ -282,19 +372,17 @@ def _compute_curve(
     return theta_template, np.stack(curves, axis=0).mean(axis=0)
 
 
-class _ScalarAccumulator:
+class _CurveAccumulator:
     def __init__(self):
-        self.total = 0.0
-        self.count = 0
+        self.curves: List[np.ndarray] = []
 
-    def add(self, value: float):
-        self.total += float(value)
-        self.count += 1
+    def add(self, curve: np.ndarray):
+        self.curves.append(curve)
 
-    def mean(self) -> float:
-        if self.count == 0:
-            return float("nan")
-        return self.total / self.count
+    def mean(self) -> np.ndarray | None:
+        if not self.curves:
+            return None
+        return np.stack(self.curves, axis=0).mean(axis=0)
 
 
 def _evaluate_layers(
@@ -306,16 +394,24 @@ def _evaluate_layers(
     chunk_size: int,
     max_eval_batches: int,
     show_progress: bool,
-) -> Dict[str, float | None]:
-    """Compute averaged metrics for each requested layer for a single checkpoint."""
-    metrics: Dict[str, float | None] = {}
+    dataset: str,
+    stratified_samples: int | None = None,
+    seed: int = 42,
+) -> Dict[str, np.ndarray | None]:
+    """Compute equivariance curves for each requested layer for a single checkpoint."""
+    metrics: Dict[str, np.ndarray | None] = {}
     total_layers = len(getattr(lit_model.model, "eq_layers", []))
+    thetas = None
 
     for column_name, layer_idx in _METRIC_COLUMNS:
         if layer_idx is not None and layer_idx > total_layers:
             metrics[column_name] = None
             continue
-        _, curve = _compute_curve(
+        # Skip layers 7 and 8 for non-colorectal datasets
+        if layer_idx is not None and layer_idx >= 7 and dataset != "colorectal_hist":
+            metrics[column_name] = None
+            continue
+        theta_vals, curve = _compute_curve(
             lit_model,
             datamodule,
             device=device,
@@ -324,9 +420,13 @@ def _evaluate_layers(
             max_batches=max_eval_batches,
             layer=layer_idx,
             show_progress=show_progress,
+            stratified_samples=stratified_samples,
+            seed=seed,
         )
-        metrics[column_name] = float(curve.mean())
-    return metrics
+        if thetas is None:
+            thetas = theta_vals
+        metrics[column_name] = curve
+    return metrics, thetas
 
 
 def aggregate_equivariance_metrics(
@@ -340,6 +440,7 @@ def aggregate_equivariance_metrics(
     device: str = "auto",
     mnist_data_dir: str = "./src/datasets_utils/mnist_rotation_new",
     show_progress: bool = False,
+    stratified_samples: int | None = None,
 ):
     device_obj = _select_device(device)
     models_dir_path = Path(models_dir)
@@ -393,10 +494,12 @@ def aggregate_equivariance_metrics(
         base_angles = max(1, int(num_angles))
         samples_per_group = base_angles * (2 if flip_flag else 1)
 
-        accumulators = {name: _ScalarAccumulator() for name, _ in _METRIC_COLUMNS}
+        accumulators = {name: _CurveAccumulator() for name, _ in _METRIC_COLUMNS}
+        theta_values = None
 
         def _accumulate_current_model():
-            layer_metrics = _evaluate_layers(
+            nonlocal theta_values
+            layer_metrics, thetas = _evaluate_layers(
                 lit_model,
                 datamodule,
                 device=device_obj,
@@ -404,11 +507,16 @@ def aggregate_equivariance_metrics(
                 chunk_size=chunk_size,
                 max_eval_batches=max_eval_batches,
                 show_progress=show_progress,
+                dataset=dataset,
+                stratified_samples=stratified_samples,
+                seed=first_entry["seed"],
             )
-            for name, value in layer_metrics.items():
-                if value is None:
+            if theta_values is None:
+                theta_values = thetas
+            for name, curve in layer_metrics.items():
+                if curve is None:
                     continue
-                accumulators[name].add(value)
+                accumulators[name].add(curve)
 
         _accumulate_current_model()
 
@@ -420,25 +528,58 @@ def aggregate_equivariance_metrics(
             lit_model.load_state_dict(state_dict)
             _accumulate_current_model()
 
-        row: Dict[str, float | str] = {"activation": activation, "bn": normalization}
+        row: Dict[str, np.ndarray | str] = {"activation": activation, "bn": normalization, "dataset": dataset}
         for name, _ in _METRIC_COLUMNS:
-            row[name] = accumulators[name].mean()
+            mean_curve = accumulators[name].mean()
+            row[name] = mean_curve
+        row["theta_values"] = theta_values
         aggregated_rows.append(row)
 
     if not aggregated_rows:
         print("No model groups produced metrics; nothing to save.")
         return None
 
+    # Save as NPZ file to preserve array data
+    npz_path = Path(output_csv).with_suffix('.npz')
+    npz_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Prepare data for NPZ format
+    save_dict = {}
+    for idx, row in enumerate(aggregated_rows):
+        prefix = f"row{idx}_"
+        save_dict[f"{prefix}activation"] = row["activation"]
+        save_dict[f"{prefix}bn"] = row["bn"]
+        save_dict[f"{prefix}dataset"] = row["dataset"]
+        save_dict[f"{prefix}theta_values"] = row["theta_values"]
+        for name, _ in _METRIC_COLUMNS:
+            curve = row.get(name)
+            if curve is not None:
+                save_dict[f"{prefix}{name}"] = curve
+
+    np.savez(npz_path, **save_dict, num_rows=len(aggregated_rows))
+    print(f"Saved equivariance curves to {npz_path}")
+
+    # Also save a human-readable CSV with mean values for quick inspection
     csv_path = Path(output_csv)
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["activation", "bn"] + [name for name, _ in _METRIC_COLUMNS]
+    fieldnames = ["dataset", "activation", "bn"] + [name for name, _ in _METRIC_COLUMNS]
     with csv_path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in aggregated_rows:
-            writer.writerow(row)
-    print(f"Saved aggregated metrics to {csv_path}")
-    return csv_path
+            csv_row = {
+                "dataset": row["dataset"],
+                "activation": row["activation"],
+                "bn": row["bn"]
+            }
+            for name, _ in _METRIC_COLUMNS:
+                curve = row.get(name)
+                if curve is not None:
+                    csv_row[name] = float(curve.mean())
+                else:
+                    csv_row[name] = None
+            writer.writerow(csv_row)
+    print(f"Saved mean metrics to {csv_path}")
+    return npz_path
 
 
 def main() -> None:
@@ -453,6 +594,7 @@ def main() -> None:
         device=args.device,
         mnist_data_dir=args.mnist_data_dir,
         show_progress=args.show_progress,
+        stratified_samples=args.stratified_samples,
     )
 
 

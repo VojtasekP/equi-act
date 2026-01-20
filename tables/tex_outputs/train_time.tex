@@ -1,0 +1,36 @@
+\begin{table}[htbp]
+\centering
+\caption{Training Time (seconds/epoch) across different models and datasets. Results averaged over 5 seeds and augmentation settings.}
+\label{tab:train_time}
+\begin{tabular}{lccc}
+\toprule
+Model & Colorectal & EuroSAT & MNIST \\
+\midrule
+ResNet18 & 1.4 & 2.0 & 0.7 \\
+\midrule
+Fourier-Elu (N=16) & --- & --- & 11.3 \\
+Fourier-Relu (N=16) & 50.1 & 94.7 & 11.1 \\
+\midrule
+FourierBN-Elu (N=16) & --- & --- & 10.4 \\
+FourierBN-Relu (N=16) & 40.4 & 84.9 & 9.8 \\
+FourierBN-Relu (N=32) & 56.5 & 97.0 & 13.2 \\
+FourierBN-Relu (N=64) & --- & --- & 19.8 \\
+FourierBN-Relu (N=8) & --- & --- & 14.9 \\
+\midrule
+Split Gated-Sigmoid-shared & 41.7 & 73.1 & 8.7 \\
+Split Gated-Sigmoid & 46.6 & 83.0 & 10.1 \\
+\midrule
+Split Norm-Elu + ELU & --- & --- & 11.3 \\
+Split Norm-ReLU + ELU & 47.8 & 87.6 & 11.4 \\
+Split Norm-Sigmoid + ELU & --- & --- & 11.3 \\
+\midrule
+Unified Norm-BN-Elu & --- & --- & 10.6 \\
+Unified Norm-BN-Relu & 37.8 & 79.8 & 10.3 \\
+Unified Norm-BN-Sigmoid & --- & --- & 10.5 \\
+\midrule
+Split Norm-BN-Elu + ELU & --- & --- & 9.8 \\
+Split Norm-BN-Relu + ELU & 37.6 & 77.0 & 9.6 \\
+Split Norm-BN-Sigmoid + ELU & --- & --- & 9.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
