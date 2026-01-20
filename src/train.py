@@ -16,9 +16,9 @@ import lightning as L
 from lightning.pytorch.loggers import WandbLogger
 
 import wandb
-from nets.RnNet import R2Net
+from nets.RnNet import R2Net, R2PointNet
 from nets.baseline_resnet import LitResNet18
-from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, EuroSATDataModule
+from datasets_utils.data_classes import MnistRotDataModule, Resisc45DataModule, ColorectalHistDataModule, EuroSATDataModule, MnistRotPointCloudDataModule
 import argparse
 import nets.equivariance_metric as em
 
@@ -267,6 +267,183 @@ class LitHnn(L.LightningModule):
         }
 
 
+class LitHnnPointCloud(L.LightningModule):
+    """
+    Lightning module for R2PointNet (point cloud variant).
+    Handles batches from PyG DataLoader with structure: batch.x, batch.pos, batch.edge_index, batch.y
+    """
+    def __init__(self,
+                 n_classes=10,
+                 dataset: str = "mnist_rot_p",
+                 max_rot_order=2,
+                 flip=False,
+                 channels_per_block=(8, 16, 32),
+                 kernels_per_block=(3, 3, 3),
+                 paddings_per_block=(1, 1, 1),
+                 conv_sigma=0.6,
+                 pool_after_every_n_blocks=2,
+                 activation_type="gated_sigmoid",
+                 pool_size=2,
+                 pool_sigma=0.66,
+                 invar_type='norm',
+                 pool_type='max',
+                 invariant_channels=64,
+                 bn="Normbn",
+                 residual: bool = False,
+                 lr=0.001,
+                 weight_decay=0.0001,
+                 grey_scale=False,
+                 epochs=200,
+                 burin_in_period=5,
+                 exp_dump=0.9,
+                 mnist=False,
+                 label_smoothing: float = 0.0,
+                 point_conv_n_rings: int = 3,
+                 point_conv_frequencies_cutoff: float = 3.0):
+        super().__init__()
+
+        self.save_hyperparameters()
+        self.dataset = dataset
+        self.loss_fn = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.epochs = epochs
+        self.burn_in_period = burin_in_period
+        self.exp_dump = exp_dump
+
+        # Use R2PointNet for point clouds
+        self.model = R2PointNet(
+            n_classes=n_classes,
+            max_rot_order=max_rot_order,
+            flip=flip,
+            channels_per_block=channels_per_block,
+            kernels_per_block=kernels_per_block,
+            paddings_per_block=paddings_per_block,
+            pool_after_every_n_blocks=pool_after_every_n_blocks,
+            conv_sigma=conv_sigma,
+            activation_type=activation_type,
+            pool_size=pool_size,
+            pool_sigma=pool_sigma,
+            invar_type=invar_type,
+            pool_type=pool_type,
+            invariant_channels=invariant_channels,
+            bn=bn,
+            grey_scale=grey_scale,
+            mnist=mnist,
+            residual=residual,
+            point_conv_n_rings=point_conv_n_rings,
+            point_conv_frequencies_cutoff=point_conv_frequencies_cutoff
+        )
+
+        # Clone basis index tensors
+        self._clone_in_indices()
+
+        self.train_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
+        self.val_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
+        self.test_acc = torchmetrics.Accuracy(task="multiclass", num_classes=n_classes)
+
+    def _clone_in_indices(self):
+        with torch.no_grad():
+            for name, tensor in list(self.model.named_parameters()) + list(self.model.named_buffers()):
+                if "in_indices_" not in name:
+                    continue
+                if not isinstance(tensor, torch.Tensor):
+                    continue
+                tensor.data = tensor.data.clone()
+
+    def on_fit_start(self):
+        n_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        n_all = sum(p.numel() for p in self.model.parameters())
+
+        self.logger.experiment.log({
+            "model/num_trainable_params": n_params,
+            "model/num_total_params": n_all
+        })
+
+    def shared_step(self, batch, acc_metric):
+        """
+        Handle PyG batch structure:
+        - batch.x: features (total_points, feature_dim)
+        - batch.pos: coordinates (total_points, 2)
+        - batch.edge_index: connectivity (2, num_edges)
+        - batch.y: labels (batch_size,)
+        - batch.batch: batch assignment tensor (total_points,)
+        """
+        x = batch.x          # (total_points, 1)
+        pos = batch.pos      # (total_points, 2)
+        edge_index = batch.edge_index  # (2, num_edges)
+        y = batch.y          # (batch_size,)
+        batch_indices = batch.batch  # PyG's batch assignment tensor
+
+        # Forward pass with batch info
+        y_hat = self.model(x, pos, edge_index, batch=batch_indices)
+        loss = self.loss_fn(y_hat, y)
+        acc = acc_metric(y_hat, y)
+        return loss, acc
+
+    def training_step(self, batch, batch_idx):
+        loss, acc = self.shared_step(batch, self.train_acc)
+        self.log('train_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log('train_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        self.model.eval()
+        loss, acc = self.shared_step(batch, self.val_acc)
+        self.log('val_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log('val_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+
+    def test_step(self, batch, batch_idx):
+        self.model.eval()
+        loss, acc = self.shared_step(batch, self.test_acc)
+        self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log('test_acc',  acc,  prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        return loss
+
+    def configure_optimizers(self):
+        if self.dataset == "mnist_rot_p":
+            optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+            scheduler = optim.lr_scheduler.SequentialLR(
+                optimizer,
+                schedulers=[
+                    optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=self.burn_in_period),
+                    optim.lr_scheduler.ExponentialLR(optimizer, gamma=self.exp_dump),
+                ],
+                milestones=[self.burn_in_period],
+            )
+        else:
+            # Fallback for other datasets
+            cosine_iters = max(1, self.epochs - self.burn_in_period)
+            optimizer = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+            if self.burn_in_period > 0:
+                scheduler = optim.lr_scheduler.SequentialLR(
+                    optimizer,
+                    schedulers=[
+                        optim.lr_scheduler.LinearLR(
+                            optimizer,
+                            start_factor=0.1,
+                            total_iters=self.burn_in_period,
+                        ),
+                        optim.lr_scheduler.CosineAnnealingLR(
+                            optimizer,
+                            T_max=cosine_iters,
+                        ),
+                    ],
+                    milestones=[self.burn_in_period],
+                )
+            else:
+                scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max=cosine_iters,
+                    eta_min=self.lr * self.exp_dump,
+                )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "monitor": "val_loss"}
+        }
+
+
 def _sanitize_component(value) -> str:
     component = str(value)
     sanitized = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in component)
@@ -362,15 +539,33 @@ def _train_impl(config):
         base_kernels_per_block = list(getattr(config, "kernels_per_block", ()))
         base_paddings_per_block = list(getattr(config, "paddings_per_block", ()))
     mnist = False
+    is_pointcloud = False  # Flag to detect point cloud mode
+
     if dataset == "mnist_rot":
-        datamodule = MnistRotDataModule(batch_size=config.batch_size, 
-                                        data_dir="./src/datasets_utils/mnist_rotation_new", 
+        datamodule = MnistRotDataModule(batch_size=config.batch_size,
+                                        data_dir="./src/datasets_utils/mnist_rotation_new",
                                         img_size=getattr(config, "img_size", None),
                                         train_fraction=train_subset_fraction,
                                         aug=config.aug,
                                         normalize=config.normalize)
         grey_scale = True
         mnist=True
+    elif dataset == "mnist_rot_p":
+        # Point cloud variant of MNIST
+        k_neighbors = getattr(config, "k_neighbors", 8)
+        radius = getattr(config, "radius", None)
+        datamodule = MnistRotPointCloudDataModule(
+            batch_size=config.batch_size,
+            data_dir=getattr(config, "pointcloud_data_dir", None),
+            train_fraction=train_subset_fraction,
+            augment_rotation=config.aug,
+            k_neighbors=k_neighbors,
+            radius=radius,
+            num_workers=getattr(config, "num_workers", None)
+        )
+        grey_scale = True
+        mnist = True
+        is_pointcloud = True
     elif dataset == "resisc45":
         datamodule = Resisc45DataModule(batch_size=config.batch_size,
                                         img_size=getattr(config, "img_size", None),
@@ -393,11 +588,12 @@ def _train_impl(config):
                                        aug=config.aug,
                                        normalize=config.normalize)
         grey_scale = False
+        mnist = True  # Use MNIST channel scaling for consistent architecture
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
     n_classes_dm = datamodule.num_classes
-    img_size = datamodule.img_size
+    img_size = getattr(datamodule, 'img_size', None)  # Point cloud datamodule doesn't have img_size
     wandb.config.update({
         "img_size": img_size,
         "dataset": dataset,
@@ -407,7 +603,17 @@ def _train_impl(config):
         "model_export_subdir": model_export_subdir,
         "model_type": model_type,
         "label_smoothing": label_smoothing,
+        "is_pointcloud": is_pointcloud,
     }, allow_val_change=True)
+
+    if is_pointcloud:
+        # Add point cloud specific config
+        wandb.config.update({
+            "k_neighbors": getattr(config, "k_neighbors", 8),
+            "radius": getattr(config, "radius", None),
+            "point_conv_n_rings": getattr(config, "point_conv_n_rings", 3),
+            "point_conv_frequencies_cutoff": getattr(config, "point_conv_frequencies_cutoff", 3.0),
+        }, allow_val_change=True)
 
     if model_type == "equivariant":
         wandb.config.update({
@@ -430,43 +636,80 @@ def _train_impl(config):
             'invar_check_every_n_epochs': invar_check_every,
             'invar_chunk_size': invar_chunk_size
         }, allow_val_change=True)
-        
-        model = LitHnn(
-            n_classes=n_classes_dm,
-            dataset=dataset,
-            max_rot_order=config.max_rot_order,
-            flip=config.flip,
 
-            channels_per_block=channels_per_block_updated,
-            kernels_per_block=base_kernels_per_block,
-            paddings_per_block=base_paddings_per_block,
-            pool_after_every_n_blocks=config.pool_after_every_n_blocks,
-            conv_sigma=config.conv_sigma,
-            activation_type=config.activation_type,
+        # Choose model based on point cloud flag
+        if is_pointcloud:
+            # Use LitHnnPointCloud for point cloud data
+            model = LitHnnPointCloud(
+                n_classes=n_classes_dm,
+                dataset=dataset,
+                max_rot_order=config.max_rot_order,
+                flip=config.flip,
 
-            pool_size=config.pool_size,
-            pool_sigma=config.pool_sigma,
-            invar_type=config.invar_type,
-            pool_type=config.pool_type,
-            invariant_channels=updated_invariant_channels,
-            bn=config.bn,
-            residual=getattr(config, "residual", False),
-            lr=config.lr,
-            weight_decay=config.weight_decay,
-            epochs=config.epochs,
-            burin_in_period=config.burin_in_period,
-            exp_dump=config.exp_dump,
-            
-            grey_scale=grey_scale,
-            img_size=img_size,
-            mnist=mnist,
-            invar_error_logging=config.invar_error_logging,
-            invar_check_every_n_epochs=invar_check_every,
-            invar_chunk_size=invar_chunk_size,
-            num_of_batches_to_use_for_invar_logging=config.num_of_batches_to_use_for_invar_logging,
-            num_of_angles=config.num_of_angles,
-            label_smoothing=label_smoothing,
-        )
+                channels_per_block=channels_per_block_updated,
+                kernels_per_block=base_kernels_per_block,
+                paddings_per_block=base_paddings_per_block,
+                pool_after_every_n_blocks=config.pool_after_every_n_blocks,
+                conv_sigma=config.conv_sigma,
+                activation_type=config.activation_type,
+
+                pool_size=config.pool_size,
+                pool_sigma=config.pool_sigma,
+                invar_type=config.invar_type,
+                pool_type=config.pool_type,
+                invariant_channels=updated_invariant_channels,
+                bn=config.bn,
+                residual=getattr(config, "residual", False),
+                lr=config.lr,
+                weight_decay=config.weight_decay,
+                epochs=config.epochs,
+                burin_in_period=config.burin_in_period,
+                exp_dump=config.exp_dump,
+
+                grey_scale=grey_scale,
+                mnist=mnist,
+                label_smoothing=label_smoothing,
+                point_conv_n_rings=getattr(config, "point_conv_n_rings", 3),
+                point_conv_frequencies_cutoff=getattr(config, "point_conv_frequencies_cutoff", 3.0),
+            )
+        else:
+            # Use LitHnn for grid-based data
+            model = LitHnn(
+                n_classes=n_classes_dm,
+                dataset=dataset,
+                max_rot_order=config.max_rot_order,
+                flip=config.flip,
+
+                channels_per_block=channels_per_block_updated,
+                kernels_per_block=base_kernels_per_block,
+                paddings_per_block=base_paddings_per_block,
+                pool_after_every_n_blocks=config.pool_after_every_n_blocks,
+                conv_sigma=config.conv_sigma,
+                activation_type=config.activation_type,
+
+                pool_size=config.pool_size,
+                pool_sigma=config.pool_sigma,
+                invar_type=config.invar_type,
+                pool_type=config.pool_type,
+                invariant_channels=updated_invariant_channels,
+                bn=config.bn,
+                residual=getattr(config, "residual", False),
+                lr=config.lr,
+                weight_decay=config.weight_decay,
+                epochs=config.epochs,
+                burin_in_period=config.burin_in_period,
+                exp_dump=config.exp_dump,
+
+                grey_scale=grey_scale,
+                img_size=img_size,
+                mnist=mnist,
+                invar_error_logging=config.invar_error_logging,
+                invar_check_every_n_epochs=invar_check_every,
+                invar_chunk_size=invar_chunk_size,
+                num_of_batches_to_use_for_invar_logging=config.num_of_batches_to_use_for_invar_logging,
+                num_of_angles=config.num_of_angles,
+                label_smoothing=label_smoothing,
+            )
     elif model_type == "resnet18":
         in_channels = 1 if dataset == "mnist_rot" else 3
         wandb.config.update({
@@ -571,7 +814,8 @@ if __name__ == "__main__":
     parser.add_argument("--project", type=str, default="research_task_hws")
     parser.add_argument("--name", type=str, default="HNet_experiment")
     parser.add_argument("--dataset", type=str, default="mnist_rot",
-                        choices=["mnist_rot", "resisc45", "colorectal_hist", "eurosat"])
+                        choices=["mnist_rot", "mnist_rot_p", "resisc45", "colorectal_hist", "eurosat"],
+                        help="Dataset to use. Use 'mnist_rot_p' for point cloud variant.")
     parser.add_argument("--model_type", type=str, default="equivariant",
                         choices=["equivariant", "resnet18"],
                         help="Choose between the equivariant model and a baseline ResNet18.")
@@ -582,7 +826,7 @@ if __name__ == "__main__":
     parser.add_argument("--residual", type=bool, default=False, help="Enable residual connections between blocks.")
     parser.add_argument("--save", type=bool, default=True, help="If true, save best checkpoint and export copy.")
     parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=0)
     parser.add_argument("--label_smoothing", type=float, default=0.0,
@@ -627,7 +871,21 @@ if __name__ == "__main__":
                         help="Directory where the selected checkpoints will be copied for later analysis.")
     parser.add_argument("--model_export_subdir", type=str, default="",
                         help="Optional name of a sub-folder under model_export_dir shared across runs (defaults to current date).")
-                        
+
+    # Point cloud specific arguments (only used when dataset="mnist_rot_p")
+    parser.add_argument("--pointcloud_data_dir", type=str, default=None,
+                        help="Directory containing point cloud .npz files (for mnist_rot_p dataset)")
+    parser.add_argument("--k_neighbors", type=int, default=8,
+                        help="Number of neighbors for kNN graph construction (point cloud mode)")
+    parser.add_argument("--radius", type=float, default=None,
+                        help="Radius for radius graph construction (if set, overrides k_neighbors in point cloud mode)")
+    parser.add_argument("--point_conv_n_rings", type=int, default=3,
+                        help="Number of concentric rings for R2PointConv bases (point cloud mode)")
+    parser.add_argument("--point_conv_frequencies_cutoff", type=float, default=3.0,
+                        help="Maximum circular harmonic frequency for R2PointConv (point cloud mode)")
+    parser.add_argument("--num_workers", type=int, default=None,
+                        help="Number of dataloader workers (point cloud mode, defaults to cpu_count//2)")
+
     args = parser.parse_args()
 
     config = vars(args)

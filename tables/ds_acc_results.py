@@ -2,7 +2,6 @@ import wandb
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from functools import reduce
 
 # ========= USER INPUTS =========
 ENTITY       = "vojtasek-petr"
@@ -15,9 +14,10 @@ BN_KEY       = "bn"               # Common config key
 AUG_KEY      = "aug"              # Indicates whether augmentation was used
 MODEL_KEY    = "model_type"
 only_noflip  = True
-OUT_CSV      = "Results.csv"
-GROUP_COLS   = [MODEL_KEY, "activation", BN_KEY, AUG_KEY]
+OUT_CSV      = "tables/csv_outputs/Results.csv"
 TRAIN_TIME_KEYS = ["train_time", "_runtime"]  # Try both explicit metric and wandb runtime (seconds)
+SEED_KEYS    = ["seed"]
+PARAM_KEYS   = ["model/num_trainable_params", "num_trainable_params"]  # Model parameter count
 # =================================
 
 api = wandb.Api(timeout=60)
@@ -32,6 +32,23 @@ def _extract_train_time_minutes(summary_dict):
                 return np.nan
     return np.nan
 
+def _extract_seed(cfg):
+    """Return the first available seed value from the config."""
+    for key in SEED_KEYS:
+        if key in cfg:
+            return cfg.get(key)
+    return None
+
+def _extract_num_params(summary_dict):
+    """Return the number of trainable parameters from the summary."""
+    for key in PARAM_KEYS:
+        if key in summary_dict and summary_dict.get(key) is not None:
+            try:
+                return int(summary_dict.get(key))
+            except Exception:
+                return np.nan
+    return np.nan
+
 def fetch_runs():
     """Pull runs from the unified project once to avoid repeated API calls."""
     filters = {"state": "finished"}
@@ -40,8 +57,8 @@ def fetch_runs():
     print(f"  found {len(project_runs)} runs")
     return project_runs
 
-def get_dataset_stats(dataset_name, runs):
-    """Filters runs for a dataset and returns grouped stats."""
+def get_dataset_rows(dataset_name, runs):
+    """Filters runs for a dataset and returns per-run rows (no aggregation)."""
     rows = []
     for r in runs:
         cfg = r.config
@@ -59,13 +76,15 @@ def get_dataset_stats(dataset_name, runs):
         aug = cfg.get(AUG_KEY)
 
         rows.append({
+            DATASET_KEY: dataset_name,
             MODEL_KEY:    model_type,
             "activation": activation,
             "bn":         bn,
             "aug":        aug,
-            # Temporary columns for aggregation, renamed later
-            "test_acc_raw": summ.get("test_acc", np.nan),
-            "train_time_minutes": _extract_train_time_minutes(summ),
+            "seed":       _extract_seed(cfg),
+            "test_acc":   summ.get("test_acc", np.nan),
+            "train_time_minutes": _extract_train_time_minutes(summ),  # already in minutes
+            "num_params": _extract_num_params(summ),
         })
 
     df = pd.DataFrame(rows)
@@ -74,39 +93,7 @@ def get_dataset_stats(dataset_name, runs):
         print(f"Warning: No runs found for dataset '{dataset_name}'")
         return None
 
-    def _is_no_aug(val):
-        if pd.isna(val):
-            return True
-        if isinstance(val, bool):
-            return not val
-        v = str(val).strip().lower()
-        return v in {"0", "false", "f", "no", "n", "no aug", ""}
-
-    # Accuracy grouped by augmentation
-    grp_acc = df.groupby(GROUP_COLS, dropna=False)
-    stats_acc = grp_acc.agg(
-        **{
-            f"{dataset_name}_mean": ("test_acc_raw", "mean"),
-            f"{dataset_name}_std": ("test_acc_raw", "std"),
-        }
-    ).reset_index()
-
-    # Time aggregated across aug/no-aug (one value per activation/bn/model)
-    grp_time = df.groupby([MODEL_KEY, "activation", BN_KEY], dropna=False)
-    stats_time = grp_time.agg(
-        **{
-            f"{dataset_name}_train_time_mean_min": ("train_time_minutes", "mean"),
-            f"{dataset_name}_train_time_std_min": ("train_time_minutes", "std"),
-        }
-    ).reset_index()
-
-    # Merge time aggregates onto accuracy stats and keep time only on no-aug rows
-    stats = stats_acc.merge(stats_time, on=[MODEL_KEY, "activation", BN_KEY], how="left")
-    time_mean_col = f"{dataset_name}_train_time_mean_min"
-    time_std_col = f"{dataset_name}_train_time_std_min"
-    mask_no_aug = stats[AUG_KEY].apply(_is_no_aug)
-    stats.loc[~mask_no_aug, [time_mean_col, time_std_col]] = np.nan
-    return stats
+    return df
 
 # 1. Fetch runs once
 runs = fetch_runs()
@@ -114,25 +101,30 @@ runs = fetch_runs()
 # 2. Collect DataFrames for all datasets
 dfs = []
 for dataset in DATASETS:
-    df_stats = get_dataset_stats(dataset, runs)
-    if df_stats is not None:
-        dfs.append(df_stats)
+    df_dataset = get_dataset_rows(dataset, runs)
+    if df_dataset is not None:
+        dfs.append(df_dataset)
 
 if not dfs:
     raise SystemExit("No data found for any dataset.")
 
-# 3. Merge all DataFrames on the common hyperparams
-final_df = reduce(lambda left, right: pd.merge(left, right, on=GROUP_COLS, how="outer"), dfs)
+# 3. Combine all per-dataset DataFrames
+final_df = pd.concat(dfs, ignore_index=True)
 
 # 4. Clean up formatting (Sort and Round)
-final_df = final_df.sort_values(GROUP_COLS)
+sort_cols = [DATASET_KEY, MODEL_KEY, "activation", BN_KEY, AUG_KEY, "seed"]
+final_df = final_df.sort_values(sort_cols, na_position="last")
 numeric_cols = list(final_df.select_dtypes(include=[np.number]).columns)
 time_cols = [c for c in numeric_cols if "train_time" in c]
-acc_cols = [c for c in numeric_cols if c not in time_cols]
+param_cols = [c for c in numeric_cols if "num_params" in c]
+acc_cols = [c for c in numeric_cols if c not in time_cols and c not in param_cols]
 if acc_cols:
-    final_df[acc_cols] = final_df[acc_cols].round(4)
+    final_df[acc_cols] = final_df[acc_cols].round(6)
 if time_cols:
     final_df[time_cols] = final_df[time_cols].round(2)  # minutes rounded to 2 decimals
+if param_cols:
+    # Keep num_params as integers (no decimal places)
+    final_df[param_cols] = final_df[param_cols].fillna(0).astype(int)
 
 # 5. Save
 Path(OUT_CSV).parent.mkdir(parents=True, exist_ok=True)

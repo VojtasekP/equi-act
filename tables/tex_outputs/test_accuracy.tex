@@ -1,0 +1,28 @@
+\begin{table}[htbp]
+\centering
+\caption{Test Accuracy (\%) across different models and datasets. Results averaged over 5 seeds.}
+\label{tab:test_accuracy}
+\begin{tabular}{lcccccc}
+\toprule
+Model & Colorectal Aug & Colorectal NoAug & EuroSAT Aug & EuroSAT NoAug & MNIST Aug & MNIST NoAug \\
+\midrule
+\textbf{ResNet18} & 97.01 & 89.01 & 96.74 & 92.30 & 98.30 & 93.62 \\
+fourier elu 16 & --- & --- & --- & --- & 98.89 & 98.58 \\
+fourier relu 16 & 93.97 & 93.60 & 97.20 & 96.58 & 99.01 & 98.88 \\
+fourierbn elu 16 & --- & --- & --- & --- & 98.95 & 98.77 \\
+fourierbn relu 16 & 94.72 & 93.55 & 97.36 & 96.65 & 99.09 & 99.02 \\
+fourierbn relu 32 & --- & --- & --- & --- & 99.10 & 99.03 \\
+fourierbn relu 64 & --- & --- & --- & --- & 99.08 & 98.99 \\
+gated shared sigmoid & 94.45 & 92.32 & 96.47 & 95.46 & 98.93 & 98.77 \\
+gated sigmoid & 94.45 & 92.37 & 96.55 & 95.86 & 98.93 & 98.82 \\
+norm relu & 92.00 & 90.29 & 95.52 & 94.84 & 98.76 & 98.70 \\
+norm squash & --- & --- & --- & --- & 98.45 & 98.05 \\
+normbn elu & --- & --- & --- & --- & 96.89 & 97.18 \\
+normbn relu & 91.63 & 87.63 & 96.29 & 94.88 & 98.16 & 97.79 \\
+normbn sigmoid & --- & --- & --- & --- & 97.82 & 97.11 \\
+normbnvec elu & --- & --- & --- & --- & 98.59 & 98.50 \\
+normbnvec relu & 92.32 & 89.28 & 95.78 & 95.31 & 98.78 & 98.57 \\
+normbnvec sigmoid & --- & --- & --- & --- & 98.40 & 97.97 \\
+\bottomrule
+\end{tabular}
+\end{table}

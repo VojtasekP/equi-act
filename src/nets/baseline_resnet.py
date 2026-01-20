@@ -67,6 +67,26 @@ class LitResNet18(L.LightningModule):
     def forward(self, x):
         return self.model(x)
 
+    def forward_invar_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract features after avgpool, before final FC layer.
+
+        Returns 512-dimensional feature vector (not classification logits).
+        """
+        x = self.model.conv1(x)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        x = self.model.maxpool(x)
+
+        x = self.model.layer1(x)
+        x = self.model.layer2(x)
+        x = self.model.layer3(x)
+        x = self.model.layer4(x)
+
+        x = self.model.avgpool(x)
+        x = torch.flatten(x, 1)  # (B, 512)
+
+        return x
+
     def shared_step(self, batch, acc_metric):
         x, y = batch
         logits = self.model(x)

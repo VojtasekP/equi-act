@@ -20,7 +20,7 @@ parameters:
     values: [0, 1, 2, 3, 4]
 
   lr:
-    value: 0.0002
+    value: 0.0001
 
   weight_decay:
     value: 0.001
@@ -29,9 +29,9 @@ parameters:
   batch_size:
     value: 128
   epochs:
-    value: 100
+    value: 500
   patience:
-    value: 100
+    value: 50
   img_size:
     value: 29
   precision:

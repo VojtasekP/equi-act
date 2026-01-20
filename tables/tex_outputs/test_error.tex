@@ -1,0 +1,38 @@
+\begin{table}[htbp]
+\centering
+\caption{Test Error (\%) across different models and datasets. Lower is better. Results averaged over 5 seeds.}
+\label{tab:test_error}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lcccccc}
+\toprule
+Model & Colorectal Aug & Colorectal NoAug & EuroSAT Aug & EuroSAT NoAug & MNIST Aug & MNIST NoAug \\
+\midrule
+ResNet18 & 3.20 & 12.37 & 3.25 & 9.49 & 1.44 & 5.77 \\
+\midrule
+Fourier-Elu (N=16) & --- & --- & --- & --- & 1.11 & 1.42 \\
+Fourier-Relu (N=16) & 6.03 & 6.40 & 2.80 & 3.43 & 0.99 & 1.12 \\
+\midrule
+FourierBN-Elu (N=16) & --- & --- & --- & --- & 1.05 & 1.23 \\
+FourierBN-Relu (N=16) & 5.28 & 6.45 & 2.64 & 3.35 & 0.91 & 0.98 \\
+FourierBN-Relu (N=32) & 5.23 & 6.88 & 2.56 & 3.61 & 0.90 & 0.97 \\
+FourierBN-Relu (N=64) & --- & --- & --- & --- & 0.92 & 1.01 \\
+FourierBN-Relu (N=8) & --- & --- & --- & --- & 0.94 & 1.03 \\
+\midrule
+Split Gated-Sigmoid-shared & 5.55 & 7.68 & 3.53 & 4.54 & 1.07 & 1.23 \\
+Split Gated-Sigmoid & 5.55 & 7.63 & 3.45 & 4.14 & 1.07 & 1.18 \\
+\midrule
+Split Norm-Elu + ELU & --- & --- & --- & --- & 1.72 & 2.30 \\
+Split Norm-ReLU + ELU & 8.00 & 9.71 & 4.48 & 5.16 & 1.24 & 1.30 \\
+Split Norm-Sigmoid + ELU & --- & --- & --- & --- & 1.69 & 2.05 \\
+\midrule
+Unified Norm-BN-Elu & --- & --- & --- & --- & 3.11 & 2.82 \\
+Unified Norm-BN-Relu & 8.37 & 12.37 & 3.71 & 5.12 & 1.84 & 2.21 \\
+Unified Norm-BN-Sigmoid & --- & --- & --- & --- & 2.18 & 2.89 \\
+\midrule
+Split Norm-BN-Elu + ELU & --- & --- & --- & --- & 1.41 & 1.50 \\
+Split Norm-BN-Relu + ELU & 7.68 & 10.72 & 4.22 & 4.69 & 1.22 & 1.43 \\
+Split Norm-BN-Sigmoid + ELU & --- & --- & --- & --- & 1.59 & 2.03 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}

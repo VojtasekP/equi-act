@@ -1,0 +1,11 @@
+checkpoint,model_type,dataset,seed,activation,bn,aug,invariance
+resnet18_eurosat_seed0_aug_resnet_scratch.ckpt,resnet18,eurosat,0,resnet_scratch,,True,0.18157462775707245
+resnet18_eurosat_seed0_noaug_resnet_scratch.ckpt,resnet18,eurosat,0,resnet_scratch,,False,0.3612670302391052
+resnet18_eurosat_seed1_aug_resnet_scratch.ckpt,resnet18,eurosat,1,resnet_scratch,,True,0.18962258100509644
+resnet18_eurosat_seed1_noaug_resnet_scratch.ckpt,resnet18,eurosat,1,resnet_scratch,,False,0.3376286029815674
+resnet18_eurosat_seed2_aug_resnet_scratch.ckpt,resnet18,eurosat,2,resnet_scratch,,True,0.1546323001384735
+resnet18_eurosat_seed2_noaug_resnet_scratch.ckpt,resnet18,eurosat,2,resnet_scratch,,False,0.3557246923446655
+resnet18_eurosat_seed3_aug_resnet_scratch.ckpt,resnet18,eurosat,3,resnet_scratch,,True,0.15397197008132935
+resnet18_eurosat_seed3_noaug_resnet_scratch.ckpt,resnet18,eurosat,3,resnet_scratch,,False,0.347584068775177
+resnet18_eurosat_seed4_aug_resnet_scratch.ckpt,resnet18,eurosat,4,resnet_scratch,,True,0.16187579929828644
+resnet18_eurosat_seed4_noaug_resnet_scratch.ckpt,resnet18,eurosat,4,resnet_scratch,,False,0.35243505239486694

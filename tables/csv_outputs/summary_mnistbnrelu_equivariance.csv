@@ -1,7 +1,0 @@
-dataset,activation,normalization,flip,position,mean_error,std_error,num_seeds,num_angles
-mnist_rot,normbn_relu,Normbn,False,first,0.1326619427454716,0.01043586780377347,5,32
-mnist_rot,normbn_relu,Normbn,False,middle,0.2059644365719578,0.005155547405805035,5,32
-mnist_rot,normbn_relu,Normbn,False,last,5.928809150645975e-05,9.893030444777419e-07,5,32
-mnist_rot,normbn_relu,Normbn,False,first,0.1326619427454716,0.01043586780377347,5,32
-mnist_rot,normbn_relu,Normbn,False,middle,0.2059644365719578,0.005155547405805035,5,32
-mnist_rot,normbn_relu,Normbn,False,last,5.928809150645975e-05,9.893030444777419e-07,5,32

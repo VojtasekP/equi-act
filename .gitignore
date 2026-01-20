@@ -14,7 +14,9 @@ build/
 .venv/
 venv/
 env/
-
+scripts/
+figures/
+tests/
 # Checkpoints, models, outputs
 wandb/
 saved_models/
@@ -22,6 +24,7 @@ saved_models/
 *.pt
 *.pth
 logs/
+*.npz
 
 # Datasets / downloads
 data/
@@ -29,3 +32,6 @@ colorectal_hist/
 eurosat/
 mnist_rotation_new/
 dataset_cache/
+
+#claude
+.claude/
