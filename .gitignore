@@ -14,7 +14,9 @@ build/
 .venv/
 venv/
 env/
-
+scripts/
+figures/
+tests/
 # Checkpoints, models, outputs
 wandb/
 saved_models/
